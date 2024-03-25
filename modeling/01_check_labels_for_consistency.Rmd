@@ -1,0 +1,234 @@
+---
+title: "Check eePlumB labels for consistency"
+author: "ROSSyndicate"
+date: "2024-03-22"
+output: html_document
+---
+
+```{r setup, echo = F}
+# get all the functions from the src folder and load them
+source_files <- list.files("src", full.names = T)
+invisible(lapply(source_files, source))
+
+# list/load/download the packages needed for this script
+packages <- c('tidyverse',
+              'ggthemes')
+invisible(lapply(packages, package_loader))
+```
+
+# Purpose
+
+This script looks through the eePlumB labels to check for inconsistencies between
+the user-exported data and the re-pull of data. It also removes/flags any labels that 
+may be contaminated with cirrus clouds.
+
+## Load data
+
+```{r}
+collated_data <- read_csv("data/labels/collated_labels_with_additional_data_v2024-03-07.csv")
+```
+
+These data will need some wrangling. The column labels are not in an intuitive order,
+and there is a mix of Sen2 and LS columns in each satellite group.
+
+## Landsat 5/7
+
+Landsat 5 and 7 have the same band info
+
+```{r}
+LS5 <- collated_data %>% 
+  filter(mission == "LS5") %>% 
+  select(date, mission, class, vol_init, 
+         # rename these for comparison's sake, these were re-named in the js code
+         B1 = Blue, 
+         B2 = Green, 
+         B3 = Red, 
+         B4 = B5, 
+         B5 = B6, 
+         B7, 
+         # re-pull columns
+         starts_with("SR"), starts_with("ST"), -SR_B6, -ST_B10,
+         -contains("AERO")) %>% 
+  mutate(across(c(B1:SR_B7),
+                ~ round(., digits = 5)))
+
+LS7 <- collated_data %>% 
+  filter(mission == "LS7") %>% 
+  select(date, mission, class, vol_init, 
+         # rename these for comparison's sake, these were re-named in the js code
+         B1 = Blue, 
+         B2 = Green, 
+         B3 = Red, 
+         B4 = B5, 
+         B5 = B6, 
+         B7, 
+         # re-pull columns
+         starts_with("SR"), starts_with("ST"), -SR_B6, -ST_B10,
+         -contains("AERO")) %>%
+  mutate(across(c(B1:SR_B7),
+                ~ round(., digits = 5)))
+```
+
+### SR Band Inconsistencies
+
+```{r}
+make_comp_plot_LS57 <- function(user_band, ee_band, data, data_name) {
+  ggplot(data, aes(x = !!sym(ee_band), y = !!sym(user_band))) +
+    geom_point() +
+    labs(title = paste0("Label-EE comparison: ", 
+                        ee_band, 
+                        " ",
+                        data_name)) +
+    theme_bw()
+}
+
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS5),
+               data_name = list("Landsat 5")),
+     .f = make_comp_plot_LS57)
+
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS7),
+               data_name = list("Landsat 7")),
+     .f = make_comp_plot_LS57)
+```
+
+Look at the data that don't match
+
+```{r}
+LS5_inconsistent <- LS5 %>% 
+  filter(is.na(SR_B1) | 
+           SR_B1 != B1)
+
+LS7_inconsistent <- LS7 %>% 
+  filter(is.na(SR_B1) | 
+           SR_B1 != B1)
+```
+
+Most of these are cloud labels, where the pixel is saturated, and then masked in 
+the ee value. Let's drop those and then look more.
+
+```{r}
+LS5_inconsistent <- LS5_inconsistent %>% 
+  filter(!(class == "cloud" & is.na(SR_B1))) 
+
+LS7_inconsistent <- LS7_inconsistent %>% 
+    filter(!(class == "cloud" & is.na(SR_B1)))
+
+```
+
+This leaves very few (40, < 2%) of labels that are inconsistent and shouldn't be
+included in the test/train set. Also, since we're not labeling saturated pixels, 
+we'll drop those too. Do a quick sanity check:
+
+```{r}
+LS5_filtered <- LS5 %>% 
+  filter(!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1)
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS5_filtered),
+               data_name = list("Landsat 5")),
+     .f = make_comp_plot_LS57)
+```
+
+And now let's look at the data by class.
+
+```{r}
+make_class_comparison <- function(data, data_name, band) {
+  ggplot(data, aes(x = class, y = !!sym(band))) +
+    geom_boxplot() +
+    labs(title = paste0("Class comparison for ", 
+                        band,
+                        " ",
+                        data_name)) +
+    theme_bw()
+    
+}
+
+pmap(.l = list(data = list(LS5_filtered),
+               data_name = list("Landsat_5"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comparison)
+
+```
+
+We aren't actually modeling other or shoreline contamination, so let's drop those.
+
+```{r}
+LS5_filtered <- LS5_filtered %>% 
+  filter(!(class %in% c("other", "shorelineContamination")))
+pmap(.l = list(data = list(LS5_filtered),
+               data_name = list("Landsat_5"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comparison)
+
+```
+
+In order to test for differences via ANOVA we need to know if the data are normally 
+distributed. So shapiro-wilkes first!   
+
+```{r}
+shapiro.test(LS5_filtered$SR_B1)
+shapiro.test(LS5_filtered$SR_B2)
+shapiro.test(LS5_filtered$SR_B3)
+shapiro.test(LS5_filtered$SR_B4)
+shapiro.test(LS5_filtered$SR_B5)
+shapiro.test(LS5_filtered$SR_B7)
+
+SR_B1_median <- LS5_filtered %>% 
+  group_by(class) %>% 
+  summarize(median = median(SR_B1))
+```
+
+Null rejected. Treat all as non-normal, so Kruskal rank sum.
+
+```{r}
+SR_B1 <- kruskal.test(LS5_filtered$SR_B1 ~ LS5_filtered$class)
+```
+
+Null rejected. This makes sense, the cloud groups are different. Let's drop those
+and test again.
+
+```{r}
+LS5_no_cloud <- LS5_filtered %>% 
+  filter(class != "cloud")
+
+SR_B1_nocloud <- kruskal.test(LS5_no_cloud$SR_B1 ~ LS5_no_cloud$class)
+SR_B2_nocloud <- kruskal.test(LS5_no_cloud$SR_B2 ~ LS5_no_cloud$class)
+SR_B3_nocloud <- kruskal.test(LS5_no_cloud$SR_B3 ~ LS5_no_cloud$class)
+SR_B4_nocloud <- kruskal.test(LS5_no_cloud$SR_B4 ~ LS5_no_cloud$class)
+SR_B5_nocloud <- kruskal.test(LS5_no_cloud$SR_B5 ~ LS5_no_cloud$class)
+SR_B7_nocloud <- kruskal.test(LS5_no_cloud$SR_B7 ~ LS5_no_cloud$class)
+
+```
+
+Null rejected. Now for some pairwise comparisons using Wilcoxon rank test.
+
+```{r}
+# look to see which are closest
+SR_B1_median %>% arrange(median)
+# open water vs darkNS
+df <- LS5_no_cloud %>%
+  filter(class %in% c("openWater", "darkNearShoreSediment")) 
+wilcox.test(df$SR_B1 ~ df$class)
+# open water vs darkNS
+df <- LS5_no_cloud %>%
+  filter(class %in% c("offShoreSediment", "darkNearShoreSediment")) 
+wilcox.test(df$SR_B1 ~ df$class)
+# offshore vs lightNearshore
+df <- LS5_no_cloud %>%
+  filter(class %in% c("offShoreSediment", "lightNearShoreSediment")) 
+wilcox.test(df$SR_B1 ~ df$class)
+adj_pval = 1-((1-pval)^5)
+# darkNS vs lightNearshore
+df <- LS5_no_cloud %>%
+  filter(class %in% c("darkNearShoreSediment", "lightNearShoreSediment")) 
+wilcox.test(df$SR_B1 ~ df$class)
+
+# adjust the pvalues for multiple comparisons
+p.adjust(c(pval1, pval3, ...))
+p.adjust(c(0.0000000001, 0.000000003, 0.05), method = "bonferroni")
+```
+
