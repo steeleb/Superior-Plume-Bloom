@@ -78,7 +78,7 @@ s2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
 export_sen_meta = (ee.batch.Export.table.toDrive(
   collection = s2,
   description = 'SEN2_image_metadata',
-  folder = 'eePlumB_output',
+  folder = 'EE_output',
   fileNamePrefix = 'SEN2_image_metadata',
   fileFormat = 'csv'))
   
