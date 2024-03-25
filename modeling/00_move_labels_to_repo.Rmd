@@ -39,46 +39,68 @@ add_data_date = "2024-03-07"
 
 This file was created in `eePlumB/2_data_ingestion/1_data_download.Rmd`.
 
-Find the collated labels data file for our version date
+Find the collated labels data file for our version date, download from drive if
+it is not in the repository
 
 ```{r}
-# grab all the file info from the collated folder
-collated = drive_ls(path = 'eePlumB_collated_data')
-# get the right version date
-collated_version = collated[grepl(og_collation_date, collated$name),]
-# grab just the labels (not the validation data)
-labels = collated_version[grepl('label', collated_version$name),]
-```
-
-Retrieve the file from drive
-
-```{r}
-collated_file <- retrieve_drive_file(driveid = labels$id)
+collated_fp <- paste0("data/labels/collated_label_data_v",
+                       og_collation_date,
+                       ".csv")
+if (file.exists(collated_fp)) {
+  message("collated file with provided collation date is already stored locally")
+} else {
+  # grab all the file info from the collated folder
+  collated = drive_ls(path = 'eePlumB_collated_data')
+  # get the right version date
+  collated_version = collated[grepl(og_collation_date, collated$name),]
+  # grab just the labels (not the validation data)
+  labels = collated_version[grepl('label', collated_version$name),]
+  collated_file <- retrieve_drive_file(driveid = labels$id)
+  #save the file locally
+  write_csv(collated_file, collated_fp)
+}
 ```
 
 ## Download the files created using 'data_re_pull' scripts in \`eePlumB/2_data_ingestion\`
 
-Make a list of the files in the drive and download them to a tmp folder
+Make a list of the files in the drive and download them to a tmp folder, if the collated
+file of the additional data doesn't exist
 
 ```{r}
-add_data_list <- drive_ls(path = "eePlumB_additional_band_data")
-
-# and download the files to that folder
-labels_add_bands <- map_df(add_data_list$id,
-                           retrieve_drive_file) %>% 
-  bind_rows()
-```
-
-## Save these files to the repository!
-
-```{r}
-write_csv(collated_file, 
-          paste0("data/labels/collated_label_data_v",
-                 og_collation_date,
-                 ".csv"))
-
-write_csv(labels_add_bands, 
-          paste0("data/labels/collated_labels_with_additional_data_v",
+add_data_collation_fp <- paste0("data/labels/collated_labels_with_additional_data_v",
                  add_data_date,
-                 ".csv"))
+                 ".csv")
+if (file.exists(add_data_collation_fp)) {
+  message("collated file with provided collation date is already stored locally")
+} else {
+  # get a list of the added band data
+  add_data_list <- drive_ls(path = "eePlumB_additional_band_data")
+  # and download the files to that folder
+  labels_add_bands <- map_df(add_data_list$id,
+                             retrieve_drive_file) %>% 
+    bind_rows()
+  # save the file locally
+  write_csv(labels_add_bands, add_data_collation_fp)
+}
 ```
+
+Also grab the scene metadata for the data
+
+```{r}
+metadata_fp <- paste0("data/labels/collated_scene_metatdata_v",
+                      add_data_date,
+                      ".csv")
+if(file.exists(metadata_fp)) {
+  message("collated file with provided collation date is already stored locally")
+} else {
+  # get a list of the metadata files from Drive
+  metadata_list <- drive_ls(path = "EE_output", pattern = "image_meta")
+  # and retrieve the files
+  metadata <- map_df(metadata_list$id,
+                     retrieve_drive_file) %>% 
+    bind_rows()
+  # save the file locally
+  write_csv(metadata, metadata_fp)
+}
+```
+
