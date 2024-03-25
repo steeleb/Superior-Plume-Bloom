@@ -68,3 +68,17 @@ labels_add_bands <- map_df(add_data_list$id,
                            retrieve_drive_file) %>% 
   bind_rows()
 ```
+
+## Save these files to the repository!
+
+```{r}
+write_csv(collated_file, 
+          paste0("data/labels/collated_label_data_v",
+                 og_collation_date,
+                 ".csv"))
+
+write_csv(labels_add_bands, 
+          paste0("data/labels/collated_labels_with_additional_data_v",
+                 add_data_date,
+                 ".csv"))
+```
