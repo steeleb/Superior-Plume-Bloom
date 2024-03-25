@@ -50,6 +50,19 @@ def applyScaleFactors_89(image):
         .addBands(opticalBands, None, True)
         .addBands(thermalBands, None, True))
 
+def rename_S2_band(bn):
+  """
+  Adds the string "SR_" to the front of a band name for use in changing the names
+  of bands in the Sentinel pull to retain labeler data.
+  
+  Args:
+      bn (ee.String): The ee.String() to add prefix to
+      
+  Returns:
+      ee.String(): An ee.String with the prefix "SR_"
+  """
+  return ee.String("SR_").cat(bn)
+
 # function to apply scaling factors to Sentinel 2
 def applyScaleFactors_S2(image):
     """
@@ -61,11 +74,14 @@ def applyScaleFactors_S2(image):
     Returns:
         ee.Image: The earth engine image with the scaled bands.
     """
-    opticalBands = image.select("B.").multiply(0.0001)
-    opticalBands2 = image.select("B..").multiply(0.0001)
+    opticalBands = image.select("B.*").multiply(0.0001)
+    old_names = opticalBands.bandNames()
+    new_names = old_names.map(rename_S2_band)
+    opticalBands = opticalBands.select(old_names, new_names)
+    keep = image.bandNames().removeAll(old_names)
     return (image
-        .addBands(opticalBands, None, True)
-        .addBands(opticalBands2, None, True))
+        .select(keep)
+        .addBands(opticalBands, None, True))
 
 # function to mask saturated pixels
 def apply_radsat_mask(image):
