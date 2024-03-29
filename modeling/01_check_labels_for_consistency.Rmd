@@ -13,8 +13,10 @@ invisible(lapply(source_files, source))
 analysis_funcs <- list.files("modeling/src", full.names = T)
 invisible(lapply(analysis_funcs, source))
 # list/load/download the packages needed for this script
-packages <- c('tidyverse',
-              'ggthemes')
+packages <- c('rstatix',
+              'tidyverse',
+              'ggthemes'
+              )
 invisible(lapply(packages, package_loader))
 ```
 
@@ -158,76 +160,44 @@ pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
      .f = make_band_comp_plot)
 ```
 
-Look at the data that don't match, in this case, we'll just use B1 as a reference
+Look at the data that don't match, in this case, we'll just use B5 as a reference
 
 ```{r}
 LS5_inconsistent <- LS5 %>% 
-  filter(is.na(SR_B1) | 
-           SR_B1 != B1)
+  filter(is.na(SR_B7) | 
+           SR_B7 != B7)
 ```
 
 Most of these are cloud labels, where the pixel is saturated, and then masked in 
-the ee value. Let's drop those and then look more.
+the ee value - we can keep these as training data as long as the values match. Let's drop those from this subset and then look more.
 
 ```{r}
 LS5_inconsistent <- LS5_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B1))) 
-
-LS7_inconsistent <- LS7_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B1)))
-
+  filter(!(class == "cloud" & is.na(SR_B7))) 
 ```
 
-This leaves ~2% of the Landsat 5 labels and <5% of the Landsat 7 labels as
-inconsistent and shouldn't be included in the test/train set. The number of LS7 
-labels being dropped is pretty high - so we might want to dig a bit more into 
-that. 
-
-Looking at the data frame for LS7 inconsistencies, it's clear there is at least
-one image-date that should be excluded from this dataset, as most of the labels
-do not match - 2020-07-18 by BJM. No other date/labelers seem to be consistently
-mis-matched - this date accounts for more than half of the inconsistencies:
-
-```{r}
-LS7_inconsistent %>% 
-  filter(date == "2020-07-18", vol_init == "BJM") %>% 
-  nrow(.)
-```
-
-
-Also, since we're not going to classify saturated pixels, we'll drop those 
-too. Let's do a quick sanity check to make sure that we've dropped values that 
-are inconsistent between pulls:
+This leaves ~`r round(nrow(LS5_inconsistent)/nrow(LS5))*100, 1)` of the Landsat 
+5 labels as inconsistent and shouldn't be included in the test/train set. 
+Since we're not going to classify saturated pixels, we'll drop those 
+too (these are instances where the pull we did will be NA but the user pull will 
+have a value). Let's do a quick sanity check to make sure that we've dropped 
+values that are inconsistent between pulls:
 
 ```{r}
 LS5_filtered <- LS5 %>% 
-  # filter data where SR_B1 has data and where the values match between the two
+  # filter data where SR_B7 has data and where the values match between the two
   # pulls and the SR values are less than or equal to 1
-  filter((!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1) | 
+  filter((!is.na(SR_B7) & SR_B7 == B7 & SR_B7 <= 1) | 
            # or where the user-specified class is cloud and the pixel was saturated
            # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B1)))
+           (class == "cloud" & is.na(SR_B7))) %>% 
+  filter(complete.cases(.))
 pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
                ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
                data = list(LS5_filtered),
                data_name = list("Landsat 5")),
      .f = make_band_comp_plot)
 
-
-LS7_filtered <- LS7 %>% 
-  # filter data where SR_B1 has data and where the values match between the two
-  # pulls and the SR values are less than or equal to 1
-  filter((!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1) | 
-           # or where the user-specified class is cloud and the pixel was saturated
-           # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B1))) %>% 
-  # filter out the problematic date/init
-  filter(!(date == "2020-07-18" & vol_init == "BJM")) 
-pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
-               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
-               data = list(LS7_filtered),
-               data_name = list("Landsat 7")),
-     .f = make_band_comp_plot)
 ```
 
 And now let's look at the data by class.
@@ -237,15 +207,10 @@ pmap(.l = list(data = list(LS5_filtered),
                data_name = list("Landsat_5"),
                band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
      .f = make_class_comp_plot)
-
-pmap(.l = list(data = list(LS7_filtered),
-               data_name = list("Landsat_7"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
-     .f = make_class_comp_plot)
-
 ```
 
-We aren't actually modeling other or shoreline contamination, so let's drop those.
+We aren't actually modeling "other" or "shoreline contamination", so let's drop
+those.
 
 ```{r}
 LS5_class_analysis <- LS5_filtered %>% 
@@ -255,16 +220,13 @@ pmap(.l = list(data = list(LS5_class_analysis),
                band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
      .f = make_class_comp_plot)
 
-LS7_class_analysis <- LS7_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination")))
-pmap(.l = list(data = list(LS7_class_analysis),
-               data_name = list("Landsat_7"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
-     .f = make_class_comp_plot)
+
 ```
 
+### Testing for inter-class differences
+
 In order to test for differences via ANOVA we need to know if the data are normally 
-distributed. So shapiro-wilkes first!   
+distributed. So shapiro-wilkes first to test for normality!   
 
 ```{r}
 shapiro.test(LS5_filtered$SR_B1)
@@ -350,3 +312,63 @@ LS7_inconsistent <- LS7 %>%
   filter(is.na(SR_B1) | 
            SR_B1 != B1)
 ```
+
+```{r}
+LS7_inconsistent <- LS7_inconsistent %>% 
+  filter(!(class == "cloud" & is.na(SR_B1)))
+
+```
+
+The number of LS7 
+labels being dropped is pretty high - so we might want to dig a bit more into 
+that. 
+
+Looking at the data frame for LS7 inconsistencies, it's clear there is at least
+one image-date that should be excluded from this dataset, as most of the labels
+do not match - 2020-07-18 by BJM. No other date/labelers seem to be consistently
+mis-matched - this date accounts for more than half of the inconsistencies:
+
+```{r}
+LS7_inconsistent %>% 
+  filter(date == "2020-07-18", vol_init == "BJM") %>% 
+  nrow(.)
+```
+
+
+```{r}
+LS7_filtered <- LS7 %>% 
+  # filter data where SR_B1 has data and where the values match between the two
+  # pulls and the SR values are less than or equal to 1
+  filter((!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1) | 
+           # or where the user-specified class is cloud and the pixel was saturated
+           # providing no surface refelctance data
+           (class == "cloud" & is.na(SR_B1))) %>% 
+  # filter out the problematic date/init
+  filter(!(date == "2020-07-18" & vol_init == "BJM")) 
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS7_filtered),
+               data_name = list("Landsat 7")),
+     .f = make_band_comp_plot)
+```
+
+```{r}
+
+pmap(.l = list(data = list(LS7_filtered),
+               data_name = list("Landsat_7"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comp_plot)
+
+
+```
+
+
+```{r}
+LS7_class_analysis <- LS7_filtered %>% 
+  filter(!(class %in% c("other", "shorelineContamination")))
+pmap(.l = list(data = list(LS7_class_analysis),
+               data_name = list("Landsat_7"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comp_plot)
+```
+
