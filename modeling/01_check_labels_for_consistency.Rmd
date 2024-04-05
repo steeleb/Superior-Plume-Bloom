@@ -6,6 +6,9 @@ output: html_document
 ---
 
 ```{r setup, echo = F}
+# keep things quiet
+knitr::opts_chunk$set(message = FALSE, error = FALSE, warning = FALSE)
+
 # get all the functions from the src folder and load them
 source_files <- list.files("src", full.names = T)
 invisible(lapply(source_files, source))
@@ -15,8 +18,7 @@ invisible(lapply(analysis_funcs, source))
 # list/load/download the packages needed for this script
 packages <- c('rstatix',
               'tidyverse',
-              'ggthemes'
-              )
+              'ggthemes')
 invisible(lapply(packages, package_loader))
 ```
 
@@ -28,9 +30,61 @@ may be contaminated with cirrus clouds.
 
 ## Load data
 
+Read in the label data:
+
 ```{r}
 collated_data <- read_csv("data/labels/collated_labels_with_additional_data_v2024-03-07.csv")
+# overlapping bands between original pull and new pull
+LS57_bands_over <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")
+LS89_bands_over <- c("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")
+S2_bands_over <-c("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B8", "SR_B11", "SR_B12")
+# and all SR bands that we care about for GTB
+LS57_bands <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B6")
+LS89_bands <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7", "ST_B10")
+S2_bands <- c("SR_B1","SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B8", "SR_B8A", "SR_B9", "SR_B11", "SR_B12")
 ```
+
+And the scene-level metadata:
+
+```{r}
+metadata <- read_csv("data/labels/collated_scene_metadata_v2024-03-07.csv") %>% 
+  mutate(mission = if_else(!is.na(SPACECRAFT_NAME),
+                           SPACECRAFT_NAME,
+                           SPACECRAFT_ID),
+         date = if_else(grepl("LAND", mission),
+                        ymd(str_sub(`system:id`, -8, nchar(`system:id`))),
+                        ymd(str_sub(`system:id`, -22, -15)))) 
+metadata_less <- metadata %>% 
+  group_by(mission, date) %>% 
+  summarise(CLOUD_COVER_max = max(CLOUD_COVER),
+            CLOUD_COVER_min = min(CLOUD_COVER),
+            CLOUD_COVER = mean(CLOUD_COVER),
+            GEOMETRIC_QUALITY = paste(na.omit(GEOMETRIC_QUALITY), collapse = "; "),
+            GENERAL_QUALITY = paste(na.omit(GENERAL_QUALITY), collapse = "; "),
+            CLOUDY_PIXEL_PERCENTAGE_max = max(CLOUDY_PIXEL_PERCENTAGE),
+            CLOUDY_PIXEL_PERCENTAGE_min = min(CLOUDY_PIXEL_PERCENTAGE),
+            CLOUDY_PIXEL_PERCENTAGE = mean(CLOUDY_PIXEL_PERCENTAGE),
+            CLOUD_COVERAGE_ASSESSMENT = mean(CLOUD_COVERAGE_ASSESSMENT),
+            CLOUD_SHADOW_PERCENTAGE_max = max(CLOUD_SHADOW_PERCENTAGE),
+            CLOUD_SHADOW_PERCENTAGE_min = min(CLOUD_SHADOW_PERCENTAGE),
+            CLOUD_SHADOW_PERCENTAGE = mean(CLOUD_SHADOW_PERCENTAGE),
+            HIGH_PROBA_CLOUDS_PERCENTAGE = mean(HIGH_PROBA_CLOUDS_PERCENTAGE),
+            MEDIUM_PROBA_CLOUDS_PERCENTAGE = mean(MEDIUM_PROBA_CLOUDS_PERCENTAGE),
+            THIN_CIRRUS_PERCENTAGE = mean(THIN_CIRRUS_PERCENTAGE),
+            SNOW_ICE_PERCENTAGE = mean(SNOW_ICE_PERCENTAGE),
+            DATA_SOURCE_REANALYSIS = paste(na.omit(DATA_SOURCE_REANALYSIS), collapse = "; "),
+            DATA_SOURCE_WATER_VAPOR = paste(na.omit(DATA_SOURCE_WATER_VAPOR), collapse = "; "),
+            IMAGE_QUALITY = paste(na.omit(IMAGE_QUALITY), collapse = "; "),
+            IMAGE_QUALITY_OLI = paste(na.omit(IMAGE_QUALITY_OLI), collapse = "; "), 
+            AOT_RETRIEVAL_ACCURACY = paste(na.omit(AOT_RETRIEVAL_ACCURACY), collapse = "; "),
+            AOT_RETRIEVAL_METHOD = paste(na.omit(AOT_RETRIEVAL_METHOD), collapse = "; "),
+            GRANULE_MEAN_AOT = mean(GRANULE_MEAN_AOT)
+            )
+  
+
+left_join(collated_data, metadata_less)
+```
+
 
 These data will need some wrangling. The column labels are not in an intuitive order,
 and there is a mix of Sen2 and LS columns in each satellite group.
@@ -147,6 +201,43 @@ S2 <- collated_data %>%
 ```
 
 
+## Convert Binary columns
+
+### Landsat 5 QA bits
+
+```{r}
+LS5 <- LS5 %>% 
+  mutate(across(c(SR_CLOUD_QA, QA_PIXEL),
+                ~ R.utils::intToBin(.),
+                .names = "{.col}_binary")) %>% 
+  mutate(snow_ice_conf = case_when(str_sub(QA_PIXEL_binary, start = 1, end = 2) == "00" ~ "none",
+                            str_sub(QA_PIXEL_binary, start = 1, end = 2) == "01" ~ "low",
+                            str_sub(QA_PIXEL_binary, start = 1, end = 2) == "10" ~ "reserved",
+                            str_sub(QA_PIXEL_binary, start = 1, end = 2) == "11" ~ "high"),
+         cloud_shad_conf = case_when(str_sub(QA_PIXEL_binary, start = 3, end = 4) == "00" ~ "none",
+                            str_sub(QA_PIXEL_binary, start = 3, end = 4) == "01" ~ "low",
+                            str_sub(QA_PIXEL_binary, start = 3, end = 4) == "10" ~ "reserved",
+                            str_sub(QA_PIXEL_binary, start = 3, end = 4) == "11" ~ "high"),
+         cloud_conf = case_when(str_sub(QA_PIXEL_binary, start = 5, end = 6) == "00" ~ "none",
+                            str_sub(QA_PIXEL_binary, start = 5, end = 6) == "01" ~ "low",
+                            str_sub(QA_PIXEL_binary, start = 5, end = 6) == "10" ~ "med",
+                            str_sub(QA_PIXEL_binary, start = 5, end = 6) == "11" ~ "high"),
+         snow = if_else(str_sub(QA_PIXEL_binary, start = 9, end = 9) == "1",
+                        1,
+                        0),
+         cloud_shad = if_else(str_sub(QA_PIXEL_binary, start = 10, end = 10) == "1",
+                        1,
+                        0),
+         cloud = if_else(str_sub(QA_PIXEL_binary, start = 11, end = 11) == "1",
+                        1,
+                        0),
+         dil_cloud = if_else(str_sub(QA_PIXEL_binary, start = 12, end = 12) == "1",
+                        1,
+                        0)
+         )
+
+```
+
 ## Landsat 5 SR bands
 
 Just look at the data to see 'how bad' the consistency is between the user-pulled
@@ -154,13 +245,13 @@ data and our pull:
 
 ```{r, echo=FALSE}
 pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
-               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               ee_band = LS57_bands,
                data = list(LS5),
                data_name = list("Landsat 5")),
      .f = make_band_comp_plot)
 ```
 
-Look at the data that don't match, in this case, we'll just use B5 as a reference
+Look at the data that don't match, in this case, we'll just use B7 as a reference
 
 ```{r}
 LS5_inconsistent <- LS5 %>% 
@@ -186,26 +277,31 @@ values that are inconsistent between pulls:
 ```{r}
 LS5_filtered <- LS5 %>% 
   # filter data where SR_B7 has data and where the values match between the two
-  # pulls and the SR values are less than or equal to 1
-  filter((!is.na(SR_B7) & SR_B7 == B7 & SR_B7 <= 1) | 
+  # pulls.
+  filter((!is.na(SR_B7) & SR_B7 == B7 ) | 
            # or where the user-specified class is cloud and the pixel was saturated
            # providing no surface refelctance data
            (class == "cloud" & is.na(SR_B7))) %>% 
+  filter(# or where any band value is greater than 1
+           if_all(LS57_bands,
+                  ~ . <= 1)) %>% 
   filter(complete.cases(.))
+```
+
+```{r, echo=FALSE}
 pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
                ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
                data = list(LS5_filtered),
                data_name = list("Landsat 5")),
      .f = make_band_comp_plot)
-
 ```
 
-And now let's look at the data by class.
+And now let's look at the data by class:
 
-```{r}
+```{r, echo=FALSE}
 pmap(.l = list(data = list(LS5_filtered),
                data_name = list("Landsat_5"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+               band = LS57_bands),
      .f = make_class_comp_plot)
 ```
 
@@ -215,13 +311,38 @@ those.
 ```{r}
 LS5_class_analysis <- LS5_filtered %>% 
   filter(!(class %in% c("other", "shorelineContamination")))
+```
+
+```{r, echo=FALSE}
 pmap(.l = list(data = list(LS5_class_analysis),
                data_name = list("Landsat_5"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+               band = LS57_bands),
      .f = make_class_comp_plot)
-
-
 ```
+
+### Outlier handling
+
+There are definitely outliers here and they may impact the interpretation of any
+statistical testing we do.
+
+```{r}
+vertical_data <- LS5_class_analysis %>% 
+  pivot_longer(LS57_bands,
+             names_to = "band_name",
+             values_to = "value") %>% 
+  rowid_to_column()
+outliers <- vertical_data %>% 
+  group_by(class, band_name) %>% 
+  identify_outliers(., value) %>% 
+  filter(is.extreme) %>% 
+  select(class:value) %>% 
+  left_join(vertical_data) %>%
+  select(-rowid) %>% 
+  pivot_wider(names_from = band_name,
+              values_from = value,
+              values_fn = max)
+```
+
 
 ### Testing for inter-class differences
 
@@ -229,66 +350,12 @@ In order to test for differences via ANOVA we need to know if the data are norma
 distributed. So shapiro-wilkes first to test for normality!   
 
 ```{r}
-shapiro.test(LS5_filtered$SR_B1)
-shapiro.test(LS5_filtered$SR_B2)
-shapiro.test(LS5_filtered$SR_B3)
-shapiro.test(LS5_filtered$SR_B4)
-shapiro.test(LS5_filtered$SR_B5)
-shapiro.test(LS5_filtered$SR_B7)
+LS57_band_sym = syms(LS57_bands)
 
-SR_B1_median <- LS5_filtered %>% 
-  group_by(class) %>% 
-  summarize(median = median(SR_B1))
-```
-
-Null rejected. Treat all as non-normal, so Kruskal rank sum.
-
-```{r}
-SR_B1 <- kruskal.test(LS5_filtered$SR_B1 ~ LS5_filtered$class)
-```
-
-Null rejected. This makes sense, the cloud groups are different. Let's drop those
-and test again.
-
-```{r}
-LS5_no_cloud <- LS5_filtered %>% 
-  filter(class != "cloud")
-
-SR_B1_nocloud <- kruskal.test(LS5_no_cloud$SR_B1 ~ LS5_no_cloud$class)
-SR_B2_nocloud <- kruskal.test(LS5_no_cloud$SR_B2 ~ LS5_no_cloud$class)
-SR_B3_nocloud <- kruskal.test(LS5_no_cloud$SR_B3 ~ LS5_no_cloud$class)
-SR_B4_nocloud <- kruskal.test(LS5_no_cloud$SR_B4 ~ LS5_no_cloud$class)
-SR_B5_nocloud <- kruskal.test(LS5_no_cloud$SR_B5 ~ LS5_no_cloud$class)
-SR_B7_nocloud <- kruskal.test(LS5_no_cloud$SR_B7 ~ LS5_no_cloud$class)
-
-```
-
-Null rejected. Now for some pairwise comparisons using Wilcoxon rank test.
-
-```{r}
-# look to see which are closest
-SR_B1_median %>% arrange(median)
-# open water vs darkNS
-df <- LS5_no_cloud %>%
-  filter(class %in% c("openWater", "darkNearShoreSediment")) 
-wilcox.test(df$SR_B1 ~ df$class)
-# open water vs darkNS
-df <- LS5_no_cloud %>%
-  filter(class %in% c("offShoreSediment", "darkNearShoreSediment")) 
-wilcox.test(df$SR_B1 ~ df$class)
-# offshore vs lightNearshore
-df <- LS5_no_cloud %>%
-  filter(class %in% c("offShoreSediment", "lightNearShoreSediment")) 
-wilcox.test(df$SR_B1 ~ df$class)
-adj_pval = 1-((1-pval)^5)
-# darkNS vs lightNearshore
-df <- LS5_no_cloud %>%
-  filter(class %in% c("darkNearShoreSediment", "lightNearShoreSediment")) 
-wilcox.test(df$SR_B1 ~ df$class)
-
-# adjust the pvalues for multiple comparisons
-p.adjust(c(pval1, pval3, ...))
-p.adjust(c(0.0000000001, 0.000000003, 0.05), method = "bonferroni")
+pmap(.l = list(dataset = list(LS5_class_analysis),
+               band = LS57_band_sym),
+     .f = test_class_sig)
+        
 ```
 
 

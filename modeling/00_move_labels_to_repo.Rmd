@@ -87,7 +87,7 @@ if (file.exists(add_data_collation_fp)) {
 Also grab the scene metadata for the data
 
 ```{r}
-metadata_fp <- paste0("data/labels/collated_scene_metatdata_v",
+metadata_fp <- paste0("data/labels/collated_scene_metadata_v",
                       add_data_date,
                       ".csv")
 if(file.exists(metadata_fp)) {

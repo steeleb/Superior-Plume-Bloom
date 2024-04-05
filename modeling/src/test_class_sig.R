@@ -1,43 +1,51 @@
-test_class_sig <- function(dataset, band){
-
-  st <- shapiro_test(dataset, !!sym(band))
+test_class_sig <- function(dataset, band, ...){
+  # there is some weird stuff happening with the statix package that make it
+  # difficult (maybe impossible) to use a symbol or a string for all the steps 
+  # here. To resolve that, creating a new data frame with just two columns with
+  # the most basic, generic names
+  df <- dataset %>% 
+    select(band = !!band, 
+           class) 
+  out <- df %>% 
+    group_by(class) %>% 
+    identify_outliers(., band)
+  # perform a shapiro test for normality
+  st <- shapiro_test(df, band)
   
+  # if the distribution is non-normal, perform Kruskal-Walis test
   if (st$p < 0.05) {
-    krus <- kruskal_test(dataset,
-                         {{sym(band)}} ~ class)
-    if (krus$p < 0.05) {
-      # indication that at least one group is statistically different. Next we 
-      # have to do post-hoc testing. In this case, our post-hoc testing will
-      # do multiple pairwise test via dunn and wilcox tests
-      dt <- dunn_test(dataset,
-                      formula = sym(band) ~ class,
-                      p.adjust.method = "bonferroni") %>% 
-        mutate(test = "dunn")
-      wt <- wilcox_test(dataset,
-                        formula = sym(band) ~ class,
-                        p.adjust.method = "bonferroni") %>% 
-        mutate(test = "wilcox")
-      rbind(dt, wt)
-    } else {
-      message("Kruskal test did not detect significant differences between classes")
-      
-    }
-  } else {
+    krus <- kruskal_test(df, band ~ class) %>% 
+      mutate(.y. = deparse(band))
+    # if the K-W test is significant, we have at least one group that is 
+    # statistically different, we need to perform post-hoc tests for multiple
+    # pairwise comparisons 
     # https://www.datanovia.com/en/lessons/kruskal-wallis-test-in-r/
-    anov <- anova_test(dataset,
-                       sym(band) ~ class)
+    if (krus$p < 0.05) {
+      dt <- dunn_test(data = df,
+                      formula = band ~ class,
+                      p.adjust.method = "bonferroni") %>% 
+        mutate(.y. = deparse(band))
+      # return a list of the dunn test and kruskal tests
+      return(list(dt, krus))
+      } else {
+      # otherwise just return non-statistically significant Kruskal test
+      message("Kruskal test did not detect significant differences between classes")
+      return(krus)
+    }
+  # if the data are normally distributed, we'll use an anova test
+  } else {
+    
+    anov <- df %>% 
+      anova_test(band ~ class) %>% 
+      anova_summary(.)
+    
     if (anov$p < 0.05) {
-      dt <- dunn_test(dataset,
-                      formula = sym(band) ~ class,
-                      p.adjust.method = "bonferroni")
-      wt <- wilcox_test(dataset,
-                        formula = sym(band) ~ class,
-                        p.adjust.method = "bonferroni") %>% 
-        mutate(test = "wilcox")
-      rbind(dt, wt)
+      
+      # need pairwise for anova
+      
     } else {
       message("anova did not detect significant differences between classes")
     }
-    }
   }
-}
+  }
+
