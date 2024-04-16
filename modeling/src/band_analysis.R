@@ -1,10 +1,12 @@
-make_band_comp_plot <- function(user_band, ee_band, data, data_name) {
-  ggplot(data, aes(x = !!sym(ee_band), y = !!sym(user_band))) +
+make_band_comp_plot <- function(user_band, ee_band, data, mission) {
+  data %>% 
+    filter(mission == mission) %>% 
+    ggplot(., aes(x = !!sym(ee_band), y = !!sym(user_band))) +
     geom_point() +
     labs(title = paste0("Label-EE comparison: ", 
                         ee_band, 
                         " ",
-                        data_name)) +
+                        mission)) +
     theme_bw()
 }
 

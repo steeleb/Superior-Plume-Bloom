@@ -43,9 +43,11 @@ Find the collated labels data file for our version date, download from drive if
 it is not in the repository
 
 ```{r}
+# make the user-exported data collation file path
 collated_fp <- paste0("data/labels/collated_label_data_v",
-                       og_collation_date,
-                       ".csv")
+                      og_collation_date,
+                      ".csv")
+
 if (file.exists(collated_fp)) {
   message("collated file with provided collation date is already stored locally")
 } else {
@@ -59,48 +61,67 @@ if (file.exists(collated_fp)) {
   #save the file locally
   write_csv(collated_file, collated_fp)
 }
+
 ```
 
 ## Download the files created using 'data_re_pull' scripts in \`eePlumB/2_data_ingestion\`
 
 Make a list of the files in the drive and download them to a tmp folder, if the collated
-file of the additional data doesn't exist
+file of the additional data doesn't exist. In this case, we'll save each mission group
+as its own file, because the colnames are different and this will save us some
+munging later.
 
 ```{r}
-add_data_collation_fp <- paste0("data/labels/collated_labels_with_additional_data_v",
-                 add_data_date,
-                 ".csv")
-if (file.exists(add_data_collation_fp)) {
-  message("collated file with provided collation date is already stored locally")
-} else {
-  # get a list of the added band data
-  add_data_list <- drive_ls(path = "eePlumB_additional_band_data")
-  # and download the files to that folder
-  labels_add_bands <- map_df(add_data_list$id,
-                             retrieve_drive_file) %>% 
-    bind_rows()
+# get a list of the added band data
+add_data_list <- drive_ls(path = "eePlumB_additional_band_data")
+
+process_new_labels_by_mission <- function(mission_text) {
+  txt_for_grepl <- str_replace(mission_text, "_", "|")
+  mission_files <- add_data_list %>% 
+    filter(grepl(txt_for_grepl, name))
+  # collate labels per mission
+  labels <- map(mission_files$id,
+                retrieve_drive_file) %>% 
+    list_rbind()
+  add_data_collation_fp <- paste0("data/labels/collated_labels_with_additional_data_",
+                                  mission_text,
+                                  "_v",
+                                  add_data_date,
+                                  ".csv")
+  
   # save the file locally
-  write_csv(labels_add_bands, add_data_collation_fp)
+  write_csv(labels, add_data_collation_fp)
 }
+
+walk(c("LS5_LS7", "LS8_LS9", "SEN2"),
+     process_new_labels_by_mission)
 ```
 
 Also grab the scene metadata for the data
 
 ```{r}
-metadata_fp <- paste0("data/labels/collated_scene_metadata_v",
-                      add_data_date,
-                      ".csv")
-if(file.exists(metadata_fp)) {
-  message("collated file with provided collation date is already stored locally")
-} else {
-  # get a list of the metadata files from Drive
-  metadata_list <- drive_ls(path = "EE_output", pattern = "image_meta")
-  # and retrieve the files
-  metadata <- map_df(metadata_list$id,
-                     retrieve_drive_file) %>% 
-    bind_rows()
+# get a list of the metadata files from Drive
+metadata_list <- drive_ls(path = "EE_output", pattern = "image_meta")
+
+process_metadata_by_mission <- function(mission_text) {
+  txt_for_grepl <- str_replace(mission_text, "_", "|")
+  mission_files <- metadata_list %>% 
+    filter(grepl(txt_for_grepl, name))
+  # collate labels per mission
+  labels <- map(mission_files$id,
+                retrieve_drive_file) %>% 
+    list_rbind()
+  add_data_collation_fp <- paste0("data/labels/collated_scene_metadata_",
+                                  mission_text,
+                                  "_v",
+                                  add_data_date,
+                                  ".csv")
+  
   # save the file locally
-  write_csv(metadata, metadata_fp)
+  write_csv(labels, add_data_collation_fp)
 }
+
+walk(c("LS5_LS7", "LS8_LS9", "SEN2"),
+     process_metadata_by_mission)
 ```
 
