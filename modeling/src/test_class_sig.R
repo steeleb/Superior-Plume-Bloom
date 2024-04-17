@@ -5,10 +5,16 @@ test_class_sig <- function(dataset, band, ...){
   # the most basic, generic names
   df <- dataset %>% 
     select(band = !!band, 
-           class) 
+           class,
+           user_label_id,
+           date) 
+  
+  # get list of extreme outliers
   out <- df %>% 
     group_by(class) %>% 
-    identify_outliers(., band)
+    identify_outliers(., band) %>% 
+    filter(is.extreme)
+  
   # perform a shapiro test for normality
   st <- shapiro_test(df, band)
   
@@ -26,26 +32,37 @@ test_class_sig <- function(dataset, band, ...){
                       p.adjust.method = "bonferroni") %>% 
         mutate(.y. = deparse(band))
       # return a list of the dunn test and kruskal tests
-      return(list(dt, krus))
+      class_test <- list(krus, dt, out)
+      names(class_test) <- c("class_difference", "pairwise_difference", "outliers")
+
       } else {
+      
       # otherwise just return non-statistically significant Kruskal test
       message("Kruskal test did not detect significant differences between classes")
-      return(krus)
+      class_test <- list(krus, out)
+      names(class_test) <- c("class_difference", "outliers")
     }
+  
   # if the data are normally distributed, we'll use an anova test
   } else {
-    
     anov <- df %>% 
       anova_test(band ~ class) %>% 
       anova_summary(.)
-    
+    # if null is rejected, perform post-hoc pairwise
     if (anov$p < 0.05) {
-      
-      # need pairwise for anova
-      
+      dt <- dunn_test(data = df,
+                      formula = band ~ class,
+                      p.adjust.method = "bonferroni") %>% 
+        mutate(.y. = deparse(band))
+      # return a list of the dunn test and anova tests
+      class_test <- list(anov, dt, out)
+      names(class_test) <- c("class_difference", "pairwise_difference", "outliers")
     } else {
       message("anova did not detect significant differences between classes")
+      class_test <- list(anov, out)
+      names(class_test) <- c("class_difference", "outliers")
     }
   }
-  }
+  class_test
+}
 

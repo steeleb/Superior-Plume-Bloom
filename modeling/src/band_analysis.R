@@ -23,5 +23,6 @@ make_class_comp_plot <- function(data, data_name, band) {
                         band,
                         " ",
                         data_name)) +
-    theme_bw()
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
 }
