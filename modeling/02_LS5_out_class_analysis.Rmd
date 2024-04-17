@@ -1,0 +1,363 @@
+---
+title: "Deep Dive LS5 eePlumB labels for training set"
+author: "ROSSyndicate"
+date: "2024-04-17"
+output: html_document
+---
+```{r setup, echo = F}
+# keep things quiet
+knitr::opts_chunk$set(message = FALSE, error = FALSE, warning = FALSE)
+
+# get all the functions from the src folder and load them
+source_files <- list.files("src", full.names = T)
+invisible(lapply(source_files, source))
+# and the funcs for this analysis
+analysis_funcs <- list.files("modeling/src", full.names = T)
+invisible(lapply(analysis_funcs, source))
+# list/load/download the packages needed for this script
+packages <- c('rstatix',
+              'tidyverse',
+              'ggthemes',
+              'janitor')
+invisible(lapply(packages, package_loader))
+```
+
+# Purpose
+
+```{r}
+harmonize_version = "v2024-04-17"
+outlier_version = "v2024-04-17"
+
+LS5 <- read_csv(paste0("data/labels/harmonized_LS57_labels_", harmonize_version, ".csv")) %>% 
+  filter(mission == "LANDSAT_5")
+```
+
+## Check for mis-matched data between user data and re-pull
+
+Just look at the data to see 'how bad' the consistency is between the
+user-pulled data and our pull, here, our user data are in "BX" format and the re-pull
+is in "SR_BX" format.
+
+```{r, echo=FALSE}
+pmap(.l = list(user_band = LS57_user,
+               ee_band = LS57_ee,
+               data = list(LS5),
+               mission = list("LANDSAT_5")),
+     .f = make_band_comp_plot)
+```
+
+There is some mis-match here, let's look at those data, in this case, we'll just
+use B7/SR_B7 as a reference to filter inconsistent labels
+
+```{r}
+LS5_inconsistent <- LS5 %>% 
+  filter((is.na(SR_B7) | SR_B7 != B7))
+```
+
+Most of these are cloud labels, where the pixel is saturated, and then masked in
+the ee value (resulting in an NA in the re-pull) - we can keep these as training data as long as the values match.
+Let's drop those from this subset and then look more.
+
+```{r}
+LS5_inconsistent <- LS5_inconsistent %>% 
+  filter(!(class == "cloud" & is.na(SR_B7))) 
+```
+
+This leaves \~`r round(nrow(LS5_inconsistent)/nrow(LS5))*100, 1)`% of the
+Landsat 5 labels as inconsistent and shouldn't be included in the test/train
+set. Since we're not going to classify saturated pixels, we'll drop those too
+(these are instances where the pull we did will be NA but the user pull will
+have a value, mostly cloud labels, which we have a ton of). Let's do a quick
+sanity check to make sure that we've dropped values that are inconsistent
+between pulls:
+
+```{r}
+LS5_filtered <- LS57 %>% 
+  filter(mission == "LANDSAT_5",
+         # filter data where SR_B7 has data and where the values match between the two
+         # pulls.
+         (!is.na(SR_B7) & SR_B7 == B7) | 
+           # or where the user-specified class is cloud and the pixel was saturated
+           # providing no surface refelctance data
+           (class == "cloud" & is.na(SR_B7) ),
+         # or where any re-pulled band value is greater than 1
+         if_all(LS57_ee,
+                ~ . <= 1)) 
+```
+
+And plot:
+
+```{r, echo=FALSE}
+pmap(.l = list(user_band = LS57_user,
+               ee_band = LS57_ee,
+               data = list(LS5_filtered),
+               mission = list("LANDSAT_5")),
+     .f = make_band_comp_plot)
+```
+
+There's still a couple of mis-matched data points in here, seen in B4, so we'll 
+put those over in inconsistent, too.
+
+```{r}
+LS5_inconsistent <-  LS5_filtered %>% 
+  filter(B4 != SR_B4) %>% 
+  bind_rows(., LS5_inconsistent)
+LS5_filtered <- LS5_filtered %>% 
+  filter(B4 == SR_B4) 
+```
+
+And now let's look at the data by class:
+
+```{r, echo=FALSE}
+pmap(.l = list(data = list(LS5_filtered),
+               data_name = list("LANDSAT_5"),
+               band = LS57_ee),
+     .f = make_class_comp_plot)
+```
+
+We aren't actually modeling "other" or "shoreline contamination", so let's drop
+those categories
+
+```{r}
+LS5_class_analysis <- LS5_filtered %>% 
+  filter(!(class %in% c("other", "shorelineContamination")))
+```
+
+```{r, echo=FALSE}
+pmap(.l = list(data = list(LS5_class_analysis),
+               data_name = list("LANDSAT_5"),
+               band = LS57_ee),
+     .f = make_class_comp_plot)
+```
+
+### Check for systemic volunteer inconsistencies
+
+Let's also go back and check to see if there is any pattern to the inconsistent
+labels.
+
+```{r}
+LS5_inconsistent %>% 
+  group_by(vol_init) %>% 
+  summarise(n_tot_labs = n(),
+            n_dates = length(unique(date))) %>% 
+  arrange(-n_dates)
+```
+
+There seem to be just a few inconsistencies here and across multiple dates. This
+could just be a processing difference (if there happened to be an update to a
+scene since users pulled these data or if these were on an overlapping portion
+of two scenes). I'm not concerned about any systemic errors here that might
+require modified data handling for a specific scene or contributor.
+
+## Outlier handling
+
+There are definitely outliers within this dataset and they may impact the
+interpretation of any statistical testing we do. Let's see if we can narrow down
+when those outliers and/or glean anything from the outlier data.
+
+```{r}
+vertical_data <- LS5_class_analysis %>% 
+  pivot_longer(LS57_ee,
+             names_to = "band_name",
+             values_to = "value") %>% 
+  rowid_to_column()
+vert_out <- vertical_data %>% 
+  select(user_label_id, rowid, date, class, band_name, value, vol_init) %>% 
+  group_by(class, band_name) %>% 
+  identify_outliers(., value) %>% 
+  filter(is.extreme)
+outliers <- vert_out  %>% 
+  left_join(vertical_data) %>%
+  select(-rowid)%>% 
+  pivot_wider(names_from = band_name,
+              values_from = value,
+              values_fn = max)
+
+print("Classes represented in outliers:")
+unique(outliers$class)
+```
+
+Okay, `r nrow(outliers)` outliers out of `r nrow(LS5_filtered)` - and they are
+all from non-cloud groups. Are there any contributor outliers?
+
+```{r}
+LS5_vol <- LS5_class_analysis %>% 
+  filter(class != "cloud") %>% 
+  group_by(vol_init) %>% 
+  summarise(n_tot = n()) %>% 
+  arrange(-n_tot)
+LS5_out_vol <- outliers %>% 
+  group_by(vol_init) %>% 
+  summarise(n_out = n()) %>% 
+  arrange(-n_out)
+full_join(LS5_vol, LS5_out_vol) %>% 
+  mutate(percent_outlier = n_out/n_tot*100) %>% 
+  arrange(-percent_outlier)
+```
+
+Meh, not great, not terrible.
+
+How many of these outliers are in specific scenes?
+
+```{r}
+LS5_out_date <- outliers %>% 
+  group_by(date, vol_init) %>% 
+  summarize(n_out = n())
+LS5_date <- LS5_class_analysis %>% 
+  filter(class != "cloud") %>% 
+  group_by(date, vol_init) %>% 
+  summarise(n_tot = n())
+LS5_out_date <- left_join(LS5_out_date, LS5_date) %>% 
+  mutate(percent_outlier = n_out/n_tot*100) %>% 
+  arrange(-percent_outlier)
+```
+
+There are two scenes here that have very high outliers - perhaps there is
+something about the AC in these particular scenes? or the general scene quality?
+
+```{r}
+LS5_out_date %>% 
+  filter(percent_outlier > 20) %>% 
+  select(date, vol_init) %>% 
+  left_join(., LS57_metadata)
+```
+
+This isn't terribly helpful, there is a range of IMAGE_QUALITY, there are ranges
+of CLOUD COVER, otherwise metadata is basically the same (but to broad to make a
+distinction for exclusion) While I feel fine dropping these two scenes from the
+training dataset, we need a systematic way to make sure we don't apply the algo
+to similar scenes. If there isn't anything common in the metadata, we would need
+to mask pixels by band ranges that are present in the training set (as those are
+the ones we have confidence in) or flag pixels that we aren't confident in after
+the fact (because they are outside of the range used for the training dataset).
+
+How many bands are represented in each labeled point? If there are outliers
+amongst the RGB bands (how users labeled data), there is probably a systemic
+problem. If the outliers are in singular bands, especially those that are not in
+the visible spectrum, we can dismiss the individual observations, and probably
+assert that the scene as a whole is okay to use in training.
+
+```{r}
+vert_out %>%
+  group_by(date, class, vol_init, user_label_id) %>% 
+  summarise(n_bands_out = n(),
+            bands_out = paste(band_name, collapse = "; ")) %>% 
+  filter(n_bands_out >= 3) %>% 
+  ungroup(class, user_label_id) %>% 
+  summarise(n_labels = n()) %>% 
+  arrange(-n_labels)
+```
+
+At the very least, there are issues in the 1988-11-23 scene... but is that user
+error? Atmospheric correction?
+
+![](images/LS5_1988-11-23.png)
+
+This looks super hazy, so that may be the issue with this particular scene.
+Unfortunately, there is no way to know this from the metadata. The
+SR_ATMOS_OPACITY value is low (this is supposed to indicate the skies are
+clear), the cirrus confidence is low (but it's also low for a majority of the
+labels in this dataset). Reanalysis for this, or dense dark vegetation
+estimation for aerosol stand-in in LEDAPS may be the culprit - or it could be
+something to do with surrounding bright snow-covered land that impacts the Rrs
+values of pixels. This is probably a reason to avoid categorizing LS5 images
+during winter months.
+
+Do any of these have QA pixel indications of cloud or cloud shadow?
+
+```{r}
+LS5_class_analysis %>% 
+  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) %in% c(10, 11)  ~ "cirrus",
+                   str_sub(QA_PIXEL_binary, 3, 4) %in% c(10, 11)  ~ "snow/ice",
+                   str_sub(QA_PIXEL_binary, 5, 6) %in% c(10, 11)  ~ "cloud shadow",
+                   str_sub(QA_PIXEL_binary, 7, 8) %in% c(10, 11)  ~ "cloud",
+                   TRUE ~ "clear")) %>% 
+  group_by(QA) %>% 
+  filter(class != "cloud") %>% 
+  summarize(n_tot = n())
+```
+
+Well, that's also not helpful, considering that most of the label dataset has at
+least a medium confidence cloud QA flag as the pixel QA.
+
+```{r}
+LS5_class_analysis %>% 
+  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
+                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
+                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
+                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
+                   TRUE ~ "clear")) %>% 
+  group_by(QA) %>% 
+  filter(class != "cloud") %>% 
+  summarize(n_tot = n())
+```
+
+Okay, if we use only "high confidence", this seems a little better.
+
+How many of these outliers have near-pixel clouds (as measured by ST_CDIST)?
+
+```{r, echo = FALSE}
+LS5_out_CDIST <- outliers %>% 
+  filter(ST_CDIST < 50) 
+# compared with the whole dataset 
+LS5_CDIST <- LS5_class_analysis %>% 
+  filter(class != "cloud" & ST_CDIST < 50)
+```
+
+There are `r nrow(LS5_out_CDIST)` labels
+(`r nrow(LS5_out_CDIST)/nrow(outliers)*100`% of oultiers) that aren't "cloud" in
+the outlier dataset that have a cloud distance \<500m and `r nrow(LS5_CDIST)`
+labels (`r nrow(LS5_CDIST)/nrow(LS5_class_analysis)*100`%) in the whole dataset
+that have a cloud distance \<500m. Since this is about the same portion of
+labels, I don't think this is terribly helprul.
+
+How many of the outliers have high cloud cover, as reported by the scene-level
+metadata? Note, we don't have the direct scene cloud cover associated with
+individual labels, rather a list of the scene level cloud cover values
+associated with the AOI.
+
+```{r, echo = FALSE}
+# max
+LS5_out_max_cloud <- outliers %>% 
+  rowwise() %>% 
+  filter(max(unlist(CLOUD_COVER)) > 75) 
+# compared with the whole dataset 
+LS5_max_cloud <- LS5_class_analysis %>% 
+  rowwise() %>% 
+  filter(class != "cloud" & max(unlist(CLOUD_COVER)) > 75) 
+
+# mean
+LS5_out_mean_cloud <- outliers %>% 
+  rowwise() %>% 
+  filter(mean(unlist(CLOUD_COVER)) > 60) 
+# compared with the whole dataset 
+LS5_mean_cloud <- LS5_class_analysis %>% 
+  rowwise() %>% 
+  filter(class != "cloud" & mean(unlist(CLOUD_COVER)) > 60) 
+```
+
+The outlier dataset contains `r nrow(LS5_out_max_cloud)`
+(`r nrow(LS5_out_max_cloud)/nrow(outliers)*100`%) where the max cloud cover was
+\> 75% and `r nrow(LS5_out_mean_cloud)`
+(`r nrow(LS5_out_mean_cloud)/nrow(outliers)*100`%) where the mean cloud cover
+was \> 60%. The filtered dataset contains `r nrow(LS5_max_cloud)`
+(`r nrow(LS5_max_cloud)/nrow(LS5_class_analysis)*100`%) where max was \>75% and
+`r nrow(LS5_mean_cloud)`
+(`r nrow(LS5_mean_cloud)/nrow(LS5_class_analysis)*100`%) where the mean cloud
+cover was \> 60%. This is a bit more uneven of a comparison, but I don't think
+this is enough to filter scenes by scene-level cloud cover.
+
+## Testing for inter-class differences
+
+In order to test for differences via ANOVA we need to know if the data are
+normally distributed. So shapiro-wilkes first to test for normality!
+
+```{r}
+LS57_band_sym = syms(LS57_bands)
+
+pmap(.l = list(dataset = list(LS5_class_analysis),
+               band = LS57_band_sym),
+     .f = test_class_sig)
+        
+```
+

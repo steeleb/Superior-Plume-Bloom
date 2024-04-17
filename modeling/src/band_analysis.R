@@ -1,3 +1,8 @@
+# store some common lists
+LS57_user <- c("B1", "B2", "B3", "B4", "B5", "B7")
+LS57_ee <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")
+
+
 make_band_comp_plot <- function(user_band, ee_band, data, mission) {
   data %>% 
     filter(mission == mission) %>% 

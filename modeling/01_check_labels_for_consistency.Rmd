@@ -1,11 +1,11 @@
 ---
 title: "Check eePlumB labels for consistency"
 author: "ROSSyndicate"
-date: "2024-03-22"
+date: "2024-04-15"
 output: html_document
 ---
 
-```{r setup, echo = F}
+```{r setup, echo = F, message = FALSE}
 # keep things quiet
 knitr::opts_chunk$set(message = FALSE, error = FALSE, warning = FALSE)
 
@@ -25,16 +25,21 @@ invisible(lapply(packages, package_loader))
 
 # Purpose
 
-This script looks through the eePlumB labels to check for inconsistencies between the user-exported data and the re-pull of data. It also removes/flags any labels that may be contaminated with cirrus clouds.
+This script collates LS57, LS89, and Sentinel 2 label data, looks through the
+user labels to check for inconsistencies between the user-exported data and the
+re-pull of data.
 
 ## Load data
+
+```{r}
+harmonize_version = "v2024-04-17"
+```
 
 ### Label data
 
 Walk through the file paths and read in the label data:
 
 ```{r}
-
 label_files <- list.files("data/labels", pattern = "labels_with", full.names = T)
 label_names <- map(label_files, 
                    function(file) {
@@ -80,7 +85,8 @@ metadata <- map(metadata,
                 })
 ```
 
-Here, we filter for "less" metadata, since not all the columns are things we care about.
+Here, we filter for "less" metadata, since not all the columns are things we
+care about.
 
 ```{r}
 LS57_metadata <- metadata$LS5_LS7 %>% 
@@ -124,7 +130,14 @@ S2_metadata <- metadata$SEN2 %>%
 
 ## Process and filter user labels
 
-This section 1) drops any point labels if they contain data from bands that are not present in a given satellite mission sensor, 2) re-orgs the data to a more sensical format, 3) removes any false precision based on the upstream radiometric bit depth of the sensor, 4) adds metadata to the label data.
+This section:
+
+1)  drops any point labels if they contain data from bands that are not present
+    in a given satellite mission sensor
+2)  re-orgs the data to a more sensical format
+3)  removes any false precision based on the upstream radiometric bit depth of
+    the sensor
+4)  adds metadata to the label data
 
 ### Landsat 5/7
 
@@ -166,7 +179,10 @@ mislabeled_LS57 <- labels$LS5_LS7 %>%
 
 ```
 
-There are `r nrow(mislabeled_LS57)` mis-attributed rows in the Landsat 5/7 dataset. That's `r nrow(mislabeled_LS57)*100/(nrow(LS57)+nrow(mislabeled_LS57))` percent of the dataset.
+There are `r nrow(mislabeled_LS57)` mis-attributed rows in the Landsat 5/7
+dataset. That's
+`r round(nrow(mislabeled_LS57)*100/(nrow(LS57)+nrow(mislabeled_LS57)), 2)`
+percent of the dataset.
 
 Let's do a quick scan of the users here:
 
@@ -187,7 +203,9 @@ All mislabeled data are from a single user.
 
 ### Landsat 8/9
 
-```{r}
+High-level formatting and setting precision.
+
+```{r, echo=FALSE}
 LS89 <- labels$LS8_LS9 %>% 
   # provide a unique id for the labels here
   rowid_to_column("user_label_id") %>% 
@@ -220,11 +238,14 @@ mislabeled_LS89 <- labels$LS8_LS9 %>%
 
 ```
 
-There are `r nrow(mislabeled_LS89)` mis-attributed rows in the Landsat 8/9 dataset. That's `r nrow(mislabeled_LS89)*100/(nrow(LS89)+nrow(mislabeled_LS89))` percent of the dataset, which is a loooot.
+There are `r nrow(mislabeled_LS89)` mis-attributed rows in the Landsat 8/9
+dataset. That's
+`r round(nrow(mislabeled_LS89)*100/(nrow(LS89)+nrow(mislabeled_LS89)), 1)`
+percent of the dataset, which is a loooot.
 
 Let's do a quick scan of the users here:
 
-```{r}
+```{r, echo=FALSE}
 LS89_totals <- labels$LS8_LS9 %>% 
   group_by(vol_init) %>% 
   summarise(n_tot_labs = n(),
@@ -237,13 +258,15 @@ full_join(LS89_totals, LS89_mis_totals) %>%
   arrange(-n_mis_labs)
 ```
 
-Okay, Most of these come from two contributors, with overlap with the LS57 labels.
+Okay, all of these come from two contributors, with overlap with the LS57 labels
+mislabels.
 
 ### Sentinel 2
 
 ```{r}
 S2 <- labels$SEN2 %>% 
   rowid_to_column("user_label_id") %>% 
+  # filter out data that doesn't have cloud probability (unique to S2)
   filter(!is.na(MSK_CLDPRB)) %>% 
   relocate(date, mission, class, vol_init, user_label_id,
            # rename these for comparison's sake, these were re-named in the js code
@@ -264,18 +287,20 @@ S2 <- labels$SEN2 %>%
   left_join(., S2_metadata) %>% 
   # pull that mission column back to the front
   relocate(date, mission)
-
-# MSK_CLDPRB is unique to Sentinel 2.
-mislabeled_S2 <- labels$SEN2 %>% 
-  filter(is.na(MSK_CLDPRB))
-
 ```
 
-There are no mis-attributed rows in the Sentinel-2 dataset.
+There are no mis-attributed rows in the Sentinel-2 dataset:
+
+```{r}
+# MSK_CLDPRB is unique to Sentinel 2.
+labels$SEN2 %>% 
+  filter(is.na(MSK_CLDPRB)) %>% 
+  nrow()
+```
 
 Let's look at some contributions here:
 
-```{r}
+```{r, echo=FALSE}
 labels$SEN2 %>% 
   group_by(vol_init) %>% 
   summarise(n_tot_labs = n(),
@@ -283,7 +308,8 @@ labels$SEN2 %>%
   arrange(-n_dates)
 ```
 
-Well, hopefully the data from the mis-matched contributors in Landsat have valid data here.
+Well, hopefully the data from the mis-matched contributors in Landsat have valid
+data here.
 
 ## Convert binary QA columns
 
@@ -307,348 +333,10 @@ S2 <- S2 %>%
 
 ```
 
-## Landsat 5 SR bands
-
-Just look at the data to see 'how bad' the consistency is between the user-pulled data and our pull.
-
-```{r, echo=FALSE}
-LS57_user <- c("B1", "B2", "B3", "B4", "B5", "B7")
-LS57_ee <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")
-pmap(.l = list(user_band = LS57_user,
-               ee_band = LS57_ee,
-               data = list(LS57),
-               mission = list("LANDSAT_5")),
-     .f = make_band_comp_plot)
-```
-
-There is some mis-match here, let's look at those data, in this case, we'll just use B7 as a reference
+## Export files for downstream uses
 
 ```{r}
-LS5_inconsistent <- LS57 %>% 
-  filter(mission == "LANDSAT_5",
-         (is.na(SR_B7) | 
-            SR_B7 != B7))
-```
-
-Most of these are cloud labels, where the pixel is saturated, and then masked in the ee value - we can keep these as training data as long as the values match. Let's drop those from this subset and then look more.
-
-```{r}
-LS5_inconsistent <- LS5_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B7))) 
-```
-
-This leaves \~`r round(nrow(LS5_inconsistent)/nrow(LS5))*100, 1)`% of the Landsat 5 labels as inconsistent and shouldn't be included in the test/train set. Since we're not going to classify saturated pixels, we'll drop those too (these are instances where the pull we did will be NA but the user pull will have a value, mostly cloud labels, which we have a ton of). Let's do a quick sanity check to make sure that we've dropped values that are inconsistent between pulls:
-
-```{r}
-LS5_filtered <- LS57 %>% 
-  filter(mission == "LANDSAT_5",
-         # filter data where SR_B7 has data and where the values match between the two
-         # pulls.
-         (!is.na(SR_B7) & SR_B7 == B7 ) | 
-           # or where the user-specified class is cloud and the pixel was saturated
-           # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B7)),
-         # or where any re-pulled band value is greater than 1
-         if_all(LS57_ee,
-                ~ . <= 1)) 
-```
-
-And plot:
-
-```{r, echo=FALSE}
-pmap(.l = list(user_band = LS57_user,
-               ee_band = LS57_ee,
-               data = list(LS5_filtered),
-               mission = list("LANDSAT_5")),
-     .f = make_band_comp_plot)
-```
-
-There's still a couple of mis-matched data points in here, seen in B4.
-
-```{r}
-LS5_inconsistent <-  LS5_filtered %>% 
-  filter(B4 != SR_B4) %>% 
-  bind_rows(., LS5_inconsistent)
-LS5_filtered <- LS5_filtered %>% 
-  filter(B4 == SR_B4) 
-```
-
-And now let's look at the data by class:
-
-```{r, echo=FALSE}
-pmap(.l = list(data = list(LS5_filtered),
-               data_name = list("LANDSAT_5"),
-               band = LS57_ee),
-     .f = make_class_comp_plot)
-```
-
-We aren't actually modeling "other" or "shoreline contamination", so let's drop those.
-
-```{r}
-LS5_class_analysis <- LS5_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination")))
-```
-
-```{r, echo=FALSE}
-pmap(.l = list(data = list(LS5_class_analysis),
-               data_name = list("LANDSAT_5"),
-               band = LS57_ee),
-     .f = make_class_comp_plot)
-```
-
-Let's also go back and check to see if there is any pattern to the inconsistent labels.
-
-```{r}
-LS5_inconsistent %>% 
-  group_by(vol_init) %>% 
-  summarise(n_tot_labs = n(),
-            n_dates = length(unique(date))) %>% 
-  arrange(-n_dates)
-```
-
-There seem to be just a few inconsistencies here and across multiple dates. This could just be a processing difference (if there happened to be an update to a scene since users pulled these data or if these were on an overlapping portion of two scenes). I'm not concerned about any systemic errors here that might require modified data handling for a specific scene or contributor.
-
-### Outlier handling
-
-There are definitely outliers within this dataset and they may impact the interpretation of any statistical testing we do. Let's see if we can narrow down when those outliers and/or glean anything from the outlier data.
-
-```{r}
-vertical_data <- LS5_class_analysis %>% 
-  pivot_longer(LS57_ee,
-             names_to = "band_name",
-             values_to = "value") %>% 
-  rowid_to_column()
-vert_out <- vertical_data %>% 
-  select(user_label_id, rowid, date, class, band_name, value, vol_init) %>% 
-  group_by(class, band_name) %>% 
-  identify_outliers(., value) %>% 
-  filter(is.extreme)
-outliers <- vert_out  %>% 
-  left_join(vertical_data) %>%
-  select(-rowid)%>% 
-  pivot_wider(names_from = band_name,
-              values_from = value,
-              values_fn = max)
-
-print("Classes represented in outliers:")
-unique(outliers$class)
-```
-
-Okay, `r nrow(outliers)` outliers out of `r nrow(LS5_filtered)` - and they are all from non-cloud groups. Are there any contributor outliers?
-
-```{r}
-LS5_vol <- LS5_class_analysis %>% 
-  filter(class != "cloud") %>% 
-  group_by(vol_init) %>% 
-  summarise(n_tot = n()) %>% 
-  arrange(-n_tot)
-LS5_out_vol <- outliers %>% 
-  group_by(vol_init) %>% 
-  summarise(n_out = n()) %>% 
-  arrange(-n_out)
-full_join(LS5_vol, LS5_out_vol) %>% 
-  mutate(percent_outlier = n_out/n_tot*100) %>% 
-  arrange(-percent_outlier)
-```
-
-Meh, not great, not terrible.
-
-How many of these outliers are in specific scenes?
-
-```{r}
-LS5_out_date <- outliers %>% 
-  group_by(date, vol_init) %>% 
-  summarize(n_out = n())
-LS5_date <- LS5_class_analysis %>% 
-  filter(class != "cloud") %>% 
-  group_by(date, vol_init) %>% 
-  summarise(n_tot = n())
-LS5_out_date <- left_join(LS5_out_date, LS5_date) %>% 
-  mutate(percent_outlier = n_out/n_tot*100) %>% 
-  arrange(-percent_outlier)
-```
-
-There are two scenes here that have very high outliers - perhaps there is something about the AC in these particular scenes? or the general scene quality?
-
-```{r}
-LS5_out_date %>% 
-  filter(percent_outlier > 20) %>% 
-  select(date, vol_init) %>% 
-  left_join(., LS57_metadata)
-```
-
-This isn't terribly helpful, there is a range of IMAGE_QUALITY, there are ranges of CLOUD COVER, otherwise metadata is basically the same (but to broad to make a distinction for exclusion) While I feel fine dropping these two scenes from the training dataset, we need a systematic way to make sure we don't apply the algo to similar scenes. If there isn't anything common in the metadata, we would need to mask pixels by band ranges that are present in the training set (as those are the ones we have confidence in) or flag pixels that we aren't confident in after the fact (because they are outside of the range used for the training dataset).
-
-How many bands are represented in each labeled point? If there are outliers amongst the RGB bands (how users labeled data), there is probably a systemic problem. If the outliers are in singular bands, especially those that are not in the visible spectrum, we can dismiss the individual observations, and probably assert that the scene as a whole is okay to use in training.
-
-```{r}
-vert_out %>%
-  group_by(date, class, vol_init, user_label_id) %>% 
-  summarise(n_bands_out = n(),
-            bands_out = paste(band_name, collapse = "; ")) %>% 
-  filter(n_bands_out >= 3) %>% 
-  ungroup(class, user_label_id) %>% 
-  summarise(n_labels = n()) %>% 
-  arrange(-n_labels)
-```
-
-At the very least, there are issues in the 1988-11-23 scene... but is that user error? Atmospheric correction?
-
-![](images/Screenshot%202024-04-16%20at%204.34.50%20PM.png)
-
-This looks super hazy, so that may be the issue with this particular scene. Unfortunately, there is no way to know this from the metadata. The SR_ATMOS_OPACITY value is low (this is supposed to indicate the skies are clear), the cirrus confidence is low (but it's also low for a majority of the labels in this dataset). Reanalysis for this, or dense dark vegetation estimation for aerosol stand-in in LEDAPS may be the culprit - or it could be something to do with surrounding bright snow-covered land that impacts the Rrs values of pixels.
-
-Do any of these have QA pixel indications of cloud or cloud shadow?
-
-```{r}
-LS5_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) %in% c(10, 11)  ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) %in% c(10, 11)  ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6) %in% c(10, 11)  ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8) %in% c(10, 11)  ~ "cloud",
-                   TRUE ~ "clear")) %>% 
-  group_by(QA) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n())
-```
-
-Well, that's also not helpful, considering that most of the label dataset has at least a medium confidence cloud QA flag as the pixel QA.
-
-```{r}
-LS5_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
-                   TRUE ~ "clear")) %>% 
-  group_by(QA) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n())
-```
-
-Okay, if we only "high confidence", this seems a little better.
-
-How many of these outliers have near-pixel clouds (as measured by ST_CDIST)?
-
-```{r, echo = FALSE}
-LS5_out_CDIST <- outliers %>% 
-  filter(ST_CDIST < 50) 
-# compared with the whole dataset 
-LS5_CDIST <- LS5_class_analysis %>% 
-  filter(class != "cloud" & ST_CDIST < 50)
-```
-
-There are print("Number of observations in outliers that have a cloud distance \<500m:") print("Number of observations in whole dataset that have a cloud distance \<500m:")
-
-That's quite a few observations... How many of them have high cloud cover, as reported by the scene-level metadata?
-
-```{r, echo = FALSE}
-print("Number of observations in outlier dataset where maximum scene-level cloud cover is >75%:")
-outliers %>% 
-  rowwise() %>% 
-  filter(max(unlist(CLOUD_COVER)) > 75) %>% 
-  nrow()
-print("Number of observations in whole dataset where maximum scene-level cloud cover is >75%:")
-# compared with the whole dataset 
-LS5_class_analysis %>% 
-  rowwise() %>% 
-  filter(class != "cloud" & max(unlist(CLOUD_COVER)) > 75) %>% 
-  nrow()
-
-print("Number of observations in outlier dataset where mean scene-level cloud cover is >75%:")
-outliers %>% 
-  rowwise() %>% 
-  filter(mean(unlist(CLOUD_COVER)) > 75) %>% 
-  nrow()
-print("Number of observations in whole dataset where mean scene-level cloud cover is >75%:")
-# compared with the whole dataset 
-LS5_class_analysis %>% 
-  rowwise() %>% 
-  filter(class != "cloud" & mean(unlist(CLOUD_COVER)) > 75) %>% 
-  nrow()
-```
-
-### Testing for inter-class differences
-
-In order to test for differences via ANOVA we need to know if the data are normally distributed. So shapiro-wilkes first to test for normality!
-
-```{r}
-LS57_band_sym = syms(LS57_bands)
-
-pmap(.l = list(dataset = list(LS5_class_analysis),
-               band = LS57_band_sym),
-     .f = test_class_sig)
-        
-```
-
-## Landast 7 SR bands
-
-Just look at the data to see 'how bad' the consistency is between the user-pulled data and our pull:
-
-```{r}
-pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
-               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
-               data = list(LS7),
-               data_name = list("Landsat 7")),
-     .f = make_band_comp_plot)
-```
-
-Look at the data that don't match, in this case, we'll just use B1 as a reference
-
-```{r}
-LS7_inconsistent <- LS7 %>% 
-  filter(is.na(SR_B1) | 
-           SR_B1 != B1)
-```
-
-```{r}
-LS7_inconsistent <- LS7_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B1)))
-
-```
-
-The number of LS7 labels being dropped is pretty high - so we might want to dig a bit more into that.
-
-Looking at the data frame for LS7 inconsistencies, it's clear there is at least one image-date that should be excluded from this dataset, as most of the labels do not match - 2020-07-18 by BJM. No other date/labelers seem to be consistently mis-matched - this date accounts for more than half of the inconsistencies:
-
-```{r}
-LS7_inconsistent %>% 
-  filter(date == "2020-07-18", vol_init == "BJM") %>% 
-  nrow(.)
-```
-
-```{r}
-LS7_filtered <- LS7 %>% 
-  # filter data where SR_B1 has data and where the values match between the two
-  # pulls and the SR values are less than or equal to 1
-  filter((!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1) | 
-           # or where the user-specified class is cloud and the pixel was saturated
-           # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B1))) %>% 
-  # filter out the problematic date/init
-  filter(!(date == "2020-07-18" & vol_init == "BJM")) 
-pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
-               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
-               data = list(LS7_filtered),
-               data_name = list("Landsat 7")),
-     .f = make_band_comp_plot)
-```
-
-```{r}
-
-pmap(.l = list(data = list(LS7_filtered),
-               data_name = list("Landsat_7"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
-     .f = make_class_comp_plot)
-
-
-```
-
-```{r}
-LS7_class_analysis <- LS7_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination")))
-pmap(.l = list(data = list(LS7_class_analysis),
-               data_name = list("Landsat_7"),
-               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
-     .f = make_class_comp_plot)
+write_csv(LS57, paste0("data/labels/harmonized_LS57_labels_v", harmonize_version, ".csv"))
+write_csv(LS89, paste0("data/labels/harmonized_LS89_labels_v", harmonize_version, ".csv"))
+write_csv(S2, paste0("data/labels/harmonized_SEN2_labels_v", harmonize_version, ".csv"))
 ```

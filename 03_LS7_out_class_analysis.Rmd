@@ -1,0 +1,83 @@
+---
+title: "Deep Dive LS7 labels for training set"
+author: "ROSSyndicate"
+date: "2024-04-17"
+output: html_document
+---
+## Landast 7 SR bands
+
+Just look at the data to see 'how bad' the consistency is between the
+user-pulled data and our pull:
+
+```{r}
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS7),
+               data_name = list("Landsat 7")),
+     .f = make_band_comp_plot)
+```
+
+Look at the data that don't match, in this case, we'll just use B1 as a
+reference
+
+```{r}
+LS7_inconsistent <- LS7 %>% 
+  filter(is.na(SR_B1) | 
+           SR_B1 != B1)
+```
+
+```{r}
+LS7_inconsistent <- LS7_inconsistent %>% 
+  filter(!(class == "cloud" & is.na(SR_B1)))
+
+```
+
+The number of LS7 labels being dropped is pretty high - so we might want to dig
+a bit more into that.
+
+Looking at the data frame for LS7 inconsistencies, it's clear there is at least
+one image-date that should be excluded from this dataset, as most of the labels
+do not match - 2020-07-18 by BJM. No other date/labelers seem to be consistently
+mis-matched - this date accounts for more than half of the inconsistencies:
+
+```{r}
+LS7_inconsistent %>% 
+  filter(date == "2020-07-18", vol_init == "BJM") %>% 
+  nrow(.)
+```
+
+```{r}
+LS7_filtered <- LS7 %>% 
+  # filter data where SR_B1 has data and where the values match between the two
+  # pulls and the SR values are less than or equal to 1
+  filter((!is.na(SR_B1) & SR_B1 == B1 & SR_B1 <= 1) | 
+           # or where the user-specified class is cloud and the pixel was saturated
+           # providing no surface refelctance data
+           (class == "cloud" & is.na(SR_B1))) %>% 
+  # filter out the problematic date/init
+  filter(!(date == "2020-07-18" & vol_init == "BJM")) 
+pmap(.l = list(user_band = c("B1", "B2", "B3", "B4", "B5", "B7"),
+               ee_band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"),
+               data = list(LS7_filtered),
+               data_name = list("Landsat 7")),
+     .f = make_band_comp_plot)
+```
+
+```{r}
+
+pmap(.l = list(data = list(LS7_filtered),
+               data_name = list("Landsat_7"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comp_plot)
+
+
+```
+
+```{r}
+LS7_class_analysis <- LS7_filtered %>% 
+  filter(!(class %in% c("other", "shorelineContamination")))
+pmap(.l = list(data = list(LS7_class_analysis),
+               data_name = list("Landsat_7"),
+               band = c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")),
+     .f = make_class_comp_plot)
+```
