@@ -23,11 +23,25 @@ packages <- c('rstatix',
 invisible(lapply(packages, package_loader))
 ```
 
+# Background
+
+At this point in the workflow, we're prepping the label data from eePlumB
+volunteers for building our classification model. So far, we've created the
+eePlumB module and directions, volunteers have labeled scenes and exported their
+label data, and we have re-pulled data from those same locations and
+mission-dates - these steps were all completed in the eePlumB directory of this
+repository. Now we need to do some QAQC of the user data to make sure that we're feeding the model only the best/most reliable data.
+
 # Purpose
 
 This script collates LS57, LS89, and Sentinel 2 label data, looks through the
 user labels to check for inconsistencies between the user-exported data and the
-re-pull of data.
+re-pull of data. The first pass for inconsistencies is to make sure that the
+user data doesn't have data from bands that don't exist in the particular
+satellite sensor. We know that the eePlumB process is not the most intuitive and
+(as we will see later) is prone to exporting data with incorrect mission-date
+attributions. There isn't anything we can do about this now except dismiss these
+data from the workflow and note that this is an imperfect process.
 
 ## Load data
 
@@ -335,8 +349,10 @@ S2 <- S2 %>%
 
 ## Export files for downstream uses
 
+These need to be saved as .RDS since some columns contain lists.
+
 ```{r}
-write_csv(LS57, paste0("data/labels/harmonized_LS57_labels_v", harmonize_version, ".csv"))
-write_csv(LS89, paste0("data/labels/harmonized_LS89_labels_v", harmonize_version, ".csv"))
-write_csv(S2, paste0("data/labels/harmonized_SEN2_labels_v", harmonize_version, ".csv"))
+write_rds(LS57, paste0("data/labels/harmonized_LS57_labels_", harmonize_version, ".RDS"))
+write_rds(LS89, paste0("data/labels/harmonized_LS89_labels_", harmonize_version, ".RDS"))
+write_rds(S2, paste0("data/labels/harmonized_SEN2_labels_", harmonize_version, ".RDS"))
 ```
