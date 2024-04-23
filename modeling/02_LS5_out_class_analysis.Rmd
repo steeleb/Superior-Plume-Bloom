@@ -19,9 +19,7 @@ invisible(lapply(analysis_funcs, source))
 packages <- c('rstatix',
               'tidyverse',
               'ggthemes',
-              'janitor',
               'GGally',
-              'ggpubr',
               'knitr')
 invisible(lapply(packages, package_loader))
 ```
@@ -252,14 +250,14 @@ LS5_out_date %>%
   filter(percent_outlier > 20) %>% 
   select(date, vol_init) %>% 
   left_join(., LS5) %>% 
-  select(date, vol_init, CLOUD_COVER:DATA_SOURCE_WATER_VAPOR) %>% 
+  select(date, vol_init, DATA_SOURCE_AIR_TEMPERATURE:max_cloud_cover) %>% 
   distinct() %>% 
   kable()
 ```
 
 This isn't terribly helpful, there is a range of `IMAGE_QUALITY`, there are
 ranges of `CLOUD_COVER`, otherwise metadata is basically the same (but to broad
-to make a distinction for exclusion) While I feel fine dropping these two scenes
+to make a distinction for exclusion). While I feel fine dropping these two scenes
 from the training dataset, we need a systematic way to make sure we don't apply
 the algo to similar scenes. If there isn't anything common in the metadata, we
 would need to mask pixels by band ranges that are present in the training set
@@ -406,18 +404,23 @@ Let's look at the 1993-06-30 image:
 
 ![](images/LS5_1993-06-30.png)
 
-Yeah, that looks pretty hazy to me! What does the scene metadata say?
+Yeah, that looks pretty hazy to me! Let's get a reminder of what the metadata 
+is for this scene:
 
 ```{r}
 LS5_for_class_analysis %>% 
   filter(date == "1993-06-30") %>% 
-  select(date, vol_init, CLOUD_COVER:DATA_SOURCE_WATER_VAPOR) %>% 
+  select(date, vol_init, DATA_SOURCE_AIR_TEMPERATURE:max_cloud_cover) %>% 
   distinct() %>% 
   kable()
 ```
 
-Ooo, yeah, there are some clouds there and some lower quality images. We should
-probably drop any labels that have a cirrus QA flag that aren't cloud labels.
+Okay, I think the combination of lower image quality and high cloud cover here may
+be meaningful. We should drop any labels that have a cirrus QA flag that aren't 
+cloud labels, and be weary of scenes with high (> 60%) cloud cover and lower image
+quality (< 9).
+
+And now for the outliers:
 
 ```{r}
 outliers %>% 
@@ -477,20 +480,22 @@ associated with the AOI.
 # max
 LS5_out_max_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(max(unlist(CLOUD_COVER)) > 75) 
+  filter(max_cloud_cover > 75) %>% 
+  pluck("CLOUD_COVER") %>% 
+  unique()
 # compared with the whole dataset 
 LS5_max_cloud <- LS5_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & max(unlist(CLOUD_COVER)) > 75) 
+  filter(class != "cloud" & max_cloud_cover > 75) 
 
 # mean
 LS5_out_mean_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(mean(unlist(CLOUD_COVER)) > 60) 
+  filter(mean_cloud_cover > 60) 
 # compared with the whole dataset 
 LS5_mean_cloud <- LS5_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & mean(unlist(CLOUD_COVER)) > 60) 
+  filter(class != "cloud" & mean_cloud_cover > 60) 
 ```
 
 The outlier dataset contains `r nrow(LS5_out_max_cloud)`
@@ -508,7 +513,8 @@ dataset to say that we should just toss scenes of either case above.
 ### RadSat QA bit
 
 Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero.
+QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull, 
+we masked satruated pixels, so this should be zero.
 
 ```{r}
 LS5_for_class_analysis %>% 
@@ -577,8 +583,9 @@ cases where the pairwise comparison were not deemed statistically significant:
 LS57_band_sym = syms(LS57_ee)
 
 LS5_class_analysis <- pmap(.l = list(dataset = list(LS5_training_labels),
-               band = LS57_band_sym),
-     .f = test_class_sig)
+                                     band = LS57_band_sym,
+                                     class_col = list(sym("class"))),
+                           .f = test_class_sig)
 names(LS5_class_analysis) <- LS57_ee
 
 map(LS5_class_analysis,

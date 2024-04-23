@@ -16,8 +16,7 @@ invisible(lapply(source_files, source))
 analysis_funcs <- list.files("modeling/src", full.names = T)
 invisible(lapply(analysis_funcs, source))
 # list/load/download the packages needed for this script
-packages <- c('rstatix',
-              'tidyverse',
+packages <- c('tidyverse',
               'ggthemes',
               'janitor')
 invisible(lapply(packages, package_loader))
@@ -109,10 +108,13 @@ LS57_metadata <- metadata$LS5_LS7 %>%
          DATA_SOURCE_AIR_TEMPERATURE:DATA_SOURCE_WATER_VAPOR,
          IMAGE_QUALITY, SENSOR_MODE_SLC) %>% 
   group_by(mission, date) %>% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = "; ")))
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = "; ")),
+            across(where(is.numeric),
+                   ~ paste(unique(na.omit(.)), collapse = "; "),
+                   .names = "{.col}_list"),
+            mean_cloud_cover = mean(CLOUD_COVER),
+            max_cloud_cover = max(CLOUD_COVER))
 
 LS89_metadata <- metadata$LS8_LS9 %>% 
   select(mission, date,
@@ -120,10 +122,13 @@ LS89_metadata <- metadata$LS8_LS9 %>%
          DATA_SOURCE_AIR_TEMPERATURE:DATA_SOURCE_WATER_VAPOR,
          IMAGE_QUALITY_OLI, IMAGE_QUALITY_TIRS, NADIR_OFFNADIR) %>% 
   group_by(mission, date) %>% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = "; ")))
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = "; ")),
+            across(where(is.numeric),
+                   ~ paste(unique(na.omit(.)), collapse = "; "),
+                   .names = "{.col}_list"),
+            mean_cloud_cover = mean(CLOUD_COVER),
+            max_cloud_cover = max(CLOUD_COVER))
 
 S2_metadata <- metadata$SEN2 %>% 
   select(mission, date,
@@ -135,10 +140,19 @@ S2_metadata <- metadata$SEN2 %>%
          SATURATED_DEFECTIVE_PIXEL_PERCENTAGE, SNOW_ICE_PERCENTAGE,
          THIN_CIRRUS_PERCENTAGE, WATER_VAPOUR_RETRIEVAL_ACCURACY) %>% 
   group_by(mission, date) %>% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = "; ")))
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = "; ")),
+            across(where(is.numeric),
+                   ~ mean(.), 
+                   .names = "{.col}_mean"),
+            across(where(is.numeric),
+                   ~ max(.), 
+                   .names = "{.col}_max"),
+            across(where(is.numeric),
+                   ~ min(.),
+                   .names = "{.col}_min"),
+            n_tiles = n()) %>% 
+  relocate(mission, date, n_tiles)
 
 ```
 

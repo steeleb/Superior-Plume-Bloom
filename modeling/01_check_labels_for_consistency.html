@@ -434,10 +434,13 @@ things we care about.</p>
          DATA_SOURCE_AIR_TEMPERATURE:DATA_SOURCE_WATER_VAPOR,
          IMAGE_QUALITY, SENSOR_MODE_SLC) %&gt;% 
   group_by(mission, date) %&gt;% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)))
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)),
+            across(where(is.numeric),
+                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;),
+                   .names = &quot;{.col}_list&quot;),
+            mean_cloud_cover = mean(CLOUD_COVER),
+            max_cloud_cover = max(CLOUD_COVER))
 
 LS89_metadata &lt;- metadata$LS8_LS9 %&gt;% 
   select(mission, date,
@@ -445,10 +448,13 @@ LS89_metadata &lt;- metadata$LS8_LS9 %&gt;%
          DATA_SOURCE_AIR_TEMPERATURE:DATA_SOURCE_WATER_VAPOR,
          IMAGE_QUALITY_OLI, IMAGE_QUALITY_TIRS, NADIR_OFFNADIR) %&gt;% 
   group_by(mission, date) %&gt;% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)))
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)),
+            across(where(is.numeric),
+                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;),
+                   .names = &quot;{.col}_list&quot;),
+            mean_cloud_cover = mean(CLOUD_COVER),
+            max_cloud_cover = max(CLOUD_COVER))
 
 S2_metadata &lt;- metadata$SEN2 %&gt;% 
   select(mission, date,
@@ -460,10 +466,19 @@ S2_metadata &lt;- metadata$SEN2 %&gt;%
          SATURATED_DEFECTIVE_PIXEL_PERCENTAGE, SNOW_ICE_PERCENTAGE,
          THIN_CIRRUS_PERCENTAGE, WATER_VAPOUR_RETRIEVAL_ACCURACY) %&gt;% 
   group_by(mission, date) %&gt;% 
-  summarise(across(where(is.numeric),
-                   ~ list(fivenum(.))),
-            across(where(is.character),
-                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)))</code></pre>
+  summarise(across(where(is.character),
+                   ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)),
+            across(where(is.numeric),
+                   ~ mean(.), 
+                   .names = &quot;{.col}_mean&quot;),
+            across(where(is.numeric),
+                   ~ max(.), 
+                   .names = &quot;{.col}_max&quot;),
+            across(where(is.numeric),
+                   ~ min(.),
+                   .names = &quot;{.col}_min&quot;),
+            n_tiles = n()) %&gt;% 
+  relocate(mission, date, n_tiles)</code></pre>
 </div>
 </div>
 <div id="process-and-filter-user-labels" class="section level2">

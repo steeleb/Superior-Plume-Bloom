@@ -19,9 +19,7 @@ invisible(lapply(analysis_funcs, source))
 packages <- c('rstatix',
               'tidyverse',
               'ggthemes',
-              'janitor',
               'GGally',
-              'ggpubr',
               'knitr')
 invisible(lapply(packages, package_loader))
 ```
@@ -132,7 +130,7 @@ LS8_for_class_analysis <- LS8_filtered %>%
 
 ```{r, echo=FALSE}
 pmap(.l = list(data = list(LS8_for_class_analysis),
-               data_name = list("LANDSAT_7"),
+               data_name = list("LANDSAT_8"),
                band = LS89_ee),
      .f = make_class_comp_plot)
 ```
@@ -223,12 +221,12 @@ LS8_out_date %>%
   filter(percent_outlier > 20) %>% 
   select(date, vol_init) %>% 
   left_join(., LS8) %>% 
-  select(date, vol_init, CLOUD_COVER:DATA_SOURCE_WATER_VAPOR) %>% 
+  select(date, vol_init, DATA_SOURCE_AIR_TEMPERATURE:max_cloud_cover) %>% 
   distinct() %>% 
   kable()
 ```
 
-Image quality is high across the board, but the 2022-11-21 image has pretty high
+Image quality is high across the board, but the 2022-11-21 image has moderate
 cloud cover, and is almost entirely outliers. Let's look at that scene:
 
 ![](images/LS8_2022-11-21.png)
@@ -272,7 +270,7 @@ NA data on the west side of the AOI. Let's look at image quality here:
 ```{r}
 LS8_for_class_analysis %>% 
   filter(date == "2022-08-01") %>% 
-  pluck("IMAGE_QUALITY_OLI") %>% 
+  pluck("IMAGE_QUALITY_OLI_list") %>% 
   unique() %>% 
   unlist()
 ```
@@ -360,20 +358,20 @@ associated with the AOI.
 # max
 LS8_out_max_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(max(unlist(CLOUD_COVER)) > 75) 
+  filter(max_cloud_cover > 75) 
 # compared with the whole dataset 
 LS8_max_cloud <- LS8_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & max(unlist(CLOUD_COVER)) > 75) 
+  filter(class != "cloud" & max_cloud_cover > 75) 
 
 # mean
 LS8_out_mean_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(mean(unlist(CLOUD_COVER)) > 60) 
+  filter(mean_cloud_cover > 60) 
 # compared with the whole dataset 
 LS8_mean_cloud <- LS8_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & mean(unlist(CLOUD_COVER)) > 60) 
+  filter(class != "cloud" & mean_cloud_cover > 60) 
 ```
 
 The outlier dataset contains `r nrow(LS8_out_max_cloud)`
@@ -389,7 +387,8 @@ mean cloud cover was \> 50%. Welp, this is unhelpful!
 ### RadSat QA bit
 
 Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero.
+QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull, 
+we masked satruated pixels, so this should be zero.
 
 ```{r}
 LS8_for_class_analysis %>% 
@@ -440,7 +439,8 @@ Let's look at the 2020-08-11 and 2017-09-04 images. First 2020-08-11:
 ![](images/LS8_2020-08-11-01.png)
 
 This image is clear as day, but if you zoom in near the Apostle Islands, you can
-see the haze.
+see the haze. As suggested by the USGS, I think it is fine to just toss labels
+where aerosol is high.
 
 And 2017-09-04:
 
@@ -452,24 +452,26 @@ dataset. This is very hazy - I'm also interested in the scene quality here:
 ```{r}
 LS8_for_class_analysis %>% 
   filter(date == "2017-09-04") %>% 
-  pluck("IMAGE_QUALITY_OLI") %>% 
+  pluck("IMAGE_QUALITY_OLI_list") %>% 
   unique() %>% 
   unlist()
 ```
 
 Well that's surprising. I guess this is truly an instance where we're going to
 have to trust the LS8 Aerosol bit and mask out all high aerosol pixels and toss
-all labels that are flagged with high aerosol.
+all labels that are flagged with high aerosol. This scene has 23 of 
+`r LS8_for_class_analysis %>% filter(date == "2017-09-04") %>% nrow()` labels that
+are flagged as high aerosol, but I argue anything in this scene should be tossed. 
 
 ### Training dataset implications
 
 For the purposes of training data, we are going to throw out the outlier scene
-on 2022-11-21
+on 2022-11-21, the high aerosol scene 2017-09-04, 
 
 ```{r}
 LS8_training_labels <- LS8_for_class_analysis %>% 
-  # drop the scene with outliers
-  filter(date != "2022-11-21",
+  # drop the scene with outliers and high aerosol
+  filter(!(date %in% c("2022-11-21", "2017-09-04")),
          # drop all the labels with high aerosol, unless the class is cloud
          (str_sub(SR_QA_AEROSOL_binary, 1, 2) != 11 | class == "cloud"))
 ```
@@ -516,8 +518,9 @@ cases where the pairwise comparison were not deemed statistically significant:
 LS89_band_sym = syms(LS89_ee)
 
 LS8_class_analysis <- pmap(.l = list(dataset = list(LS8_training_labels),
-               band = LS89_band_sym),
-     .f = test_class_sig)
+                                     band = LS89_band_sym,
+                                     class_col = list(sym("class"))),
+                           .f = test_class_sig)
 names(LS8_class_analysis) <- LS89_ee
 
 map(LS8_class_analysis,
@@ -556,14 +559,66 @@ LS8_training_labels %>%
                                  class == "lightNearShoreSediment" ~ "LNSS",
                                  class == "offShoreSediment" ~ "OSS",
                                  TRUE ~ class)) %>% 
-  filter(grepl("Sediment", class)) %>% 
+  filter(grepl("Sediment", class) | class == "openWater") %>% 
 ggpairs(., columns = LS89_ee, aes(color = class_short)) + 
   scale_color_colorblind() +
   scale_fill_colorblind() +
   theme_few()
 ```
 
-Hmm, this is even more fuzzy for
+Hmm, this is a true scatter shot. It will be interesting to see what happens in
+development and application. 
+
+### Aggregating sediment classes and performing statistical tests
+
+As a back up, we should consider using aggregated sediment classes, where any 
+label of sediment is treated as a general class of "sediment". Let's do the same 
+process here to test for class significance.
+
+```{r, echo = FALSE}
+LS8_training_labels <- LS8_training_labels %>% 
+  mutate(agg_class = if_else(grepl("Sediment", class),
+                             "sediment",
+                             class))
+
+LS8_class_analysis_aggregated <- pmap(.l = list(dataset = list(LS8_training_labels),
+                                     band = LS89_band_sym,
+                                     class_col = list(sym("agg_class"))),
+                           .f = test_class_sig)
+names(LS8_class_analysis_aggregated) <- LS89_ee
+
+map(LS8_class_analysis_aggregated,
+    function(band) {
+      band$pairwise_difference %>% 
+        filter(p.adj.signif == "ns")
+    }
+  ) %>% 
+  list_rbind() %>% 
+  rename(band = .y.)
+```
+
+And let's look at the scatter plots here:
+
+```{r, echo=FALSE, fig.dim=c(10,10)}
+LS8_training_labels %>% 
+ggpairs(., columns = LS89_ee, aes(color = agg_class)) + 
+  scale_color_colorblind() +
+  scale_fill_colorblind() +
+  theme_few()
+```
+
+And if we drop the cloud:
+
+```{r}
+LS8_training_labels %>% 
+  filter(agg_class != "cloud") %>% 
+ggpairs(., columns = LS89_ee, aes(color = agg_class)) + 
+  scale_color_colorblind() +
+  scale_fill_colorblind() +
+  theme_few()
+```
+
+These seem pretty recognizable in visible band space, but maybe not otherwise. 
 
 ## Export the training labels
 
@@ -576,7 +631,8 @@ Things to note for Landsat 8:
     outliers. will need to be cautious applying the algo when snow is on the
     ground!
 -   must mask high aerosol pixels, as they will get labeled as something else
-    entirely.
+    entirely because high aerosol results in green-hued areas of scenes.
+-   We may need to aggregate the sediment into a single class for reliable results
 
 ```{r}
 write_rds(LS8_training_labels, paste0("data/labels/LS8_labels_for_tvt_", outlier_version, ".RDS"))

@@ -19,9 +19,7 @@ invisible(lapply(analysis_funcs, source))
 packages <- c('rstatix',
               'tidyverse',
               'ggthemes',
-              'janitor',
               'GGally',
-              'ggpubr',
               'knitr')
 invisible(lapply(packages, package_loader))
 ```
@@ -251,7 +249,7 @@ LS7_out_date %>%
   filter(percent_outlier > 20) %>% 
   select(date, vol_init) %>% 
   left_join(., LS7) %>% 
-  select(date, vol_init, CLOUD_COVER:DATA_SOURCE_WATER_VAPOR) %>% 
+  select(date, vol_init, DATA_SOURCE_AIR_TEMPERATURE:max_cloud_cover) %>% 
   distinct() %>% 
   kable()
 ```
@@ -409,20 +407,20 @@ associated with the AOI.
 # max
 LS7_out_max_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(max(unlist(CLOUD_COVER)) > 75) 
+  filter(max_cloud_cover > 75) 
 # compared with the whole dataset 
 LS7_max_cloud <- LS7_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & max(unlist(CLOUD_COVER)) > 75) 
+  filter(class != "cloud" & max_cloud_cover > 75) 
 
 # mean
 LS7_out_mean_cloud <- outliers %>% 
   rowwise() %>% 
-  filter(mean(unlist(CLOUD_COVER)) > 60) 
+  filter(mean_cloud_cover > 60) 
 # compared with the whole dataset 
 LS7_mean_cloud <- LS7_for_class_analysis %>% 
   rowwise() %>% 
-  filter(class != "cloud" & mean(unlist(CLOUD_COVER)) > 60) 
+  filter(class != "cloud" & mean_cloud_cover > 60) 
 ```
 
 The outlier dataset contains `r nrow(LS7_out_max_cloud)`
@@ -440,7 +438,8 @@ dataset to say that we should just toss scenes of either case above.
 ### RadSat QA bit
 
 Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero.
+QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull, 
+we masked satruated pixels, so this should be zero.
 
 ```{r}
 LS7_for_class_analysis %>% 
@@ -506,8 +505,9 @@ cases where the pairwise comparison were not deemed statistically significant:
 LS57_band_sym = syms(LS57_ee)
 
 LS7_class_analysis <- pmap(.l = list(dataset = list(LS7_training_labels),
-               band = LS57_band_sym),
-     .f = test_class_sig)
+                                     band = LS57_band_sym,
+                                     class_col = list(sym("class"))),
+                           .f = test_class_sig)
 names(LS7_class_analysis) <- LS57_ee
 
 map(LS7_class_analysis,

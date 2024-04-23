@@ -1,11 +1,11 @@
-test_class_sig <- function(dataset, band, ...){
+test_class_sig <- function(dataset, band, class_col, ...){
   # there is some weird stuff happening with the statix package that make it
   # difficult (maybe impossible) to use a symbol or a string for all the steps 
   # here. To resolve that, creating a new data frame with just two columns with
   # the most basic, generic names
   df <- dataset %>% 
     select(band = !!band, 
-           class,
+           class = !!class_col,
            user_label_id,
            date) 
   
