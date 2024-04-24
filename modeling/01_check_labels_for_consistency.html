@@ -382,11 +382,14 @@ dismiss these data from the workflow and note that this is an imperfect
 process.</p>
 <div id="load-data" class="section level2">
 <h2>Load data</h2>
-<pre class="r"><code>harmonize_version = &quot;v2024-04-17&quot;</code></pre>
+<pre class="r"><code>add_data_date = &quot;2024-04-24&quot;
+harmonize_version = &quot;v2024-04-24&quot;</code></pre>
 <div id="label-data" class="section level3">
 <h3>Label data</h3>
 <p>Walk through the file paths and read in the label data:</p>
 <pre class="r"><code>label_files &lt;- list.files(&quot;data/labels&quot;, pattern = &quot;labels_with&quot;, full.names = T)
+label_files &lt;- label_files[grepl(add_data_date, label_files)]
+
 label_names &lt;- map(label_files, 
                    function(file) {
                      str_sub(file,
@@ -402,6 +405,8 @@ labels &lt;- map(label_files, read_csv) %&gt;%
 <h3>Metadata</h3>
 <p>Do the same for the scene-level metadata:</p>
 <pre class="r"><code>metadata_files &lt;- list.files(&quot;data/labels&quot;, pattern = &quot;metadata&quot;, full.names = T)
+metadata_files &lt;- metadata_files[grepl(add_data_date, metadata_files)]
+
 meta_names &lt;- map(metadata_files, 
                   function(file) {
                     str_sub(file,
@@ -582,7 +587,7 @@ full_join(LS57_totals, LS57_mis_totals) %&gt;%
 ## 8 MRB             641       7         NA          NA
 ## 9 SKS              43       1         NA          NA</code></pre>
 <p>Okay, all of these come from two contributors, with overlap with the
-LS57 labels mislabels.</p>
+LS57 labels mislabels volunteer</p>
 </div>
 <div id="sentinel-2" class="section level3">
 <h3>Sentinel 2</h3>
@@ -597,9 +602,7 @@ LS57 labels mislabels.</p>
          B4 = Red, 
          B5, B6, B7, B8, B11, B12,
          # re-pull columns
-         starts_with(&quot;SR&quot;), 
-         cirrus, opaque_cloud, starts_with(&quot;QA&quot;), 
-         starts_with(&quot;MSK&quot;)) %&gt;% 
+         starts_with(&quot;SR&quot;)) %&gt;% 
   # drop mission column for proper joining (there is no way to distinguish Sentinel
   # a and b missions, and the dates are unique)
   select(-mission) %&gt;% 
@@ -629,25 +632,6 @@ labels$SEN2 %&gt;%
 <p>Well, hopefully the data from the mis-matched contributors in Landsat
 have valid data here.</p>
 </div>
-</div>
-<div id="convert-binary-qa-columns" class="section level2">
-<h2>Convert binary QA columns</h2>
-<p>Here, we’re just converting any of the QA integer columns back to
-binary.</p>
-<pre class="r"><code>LS57 &lt;- LS57 %&gt;% 
-  mutate(across(c(SR_CLOUD_QA, QA_PIXEL, QA_RADSAT),
-                ~ R.utils::intToBin(.),
-                .names = &quot;{.col}_binary&quot;)) 
-
-LS89 &lt;- LS89 %&gt;% 
-  mutate(across(c(SR_QA_AEROSOL, QA_PIXEL, QA_RADSAT),
-                ~ R.utils::intToBin(.),
-                .names = &quot;{.col}_binary&quot;)) 
-
-S2 &lt;- S2 %&gt;% 
-    mutate(across(c(QA10, QA20, QA60),
-                ~ R.utils::intToBin(.),
-                .names = &quot;{.col}_binary&quot;)) </code></pre>
 </div>
 <div id="export-files-for-downstream-uses" class="section level2">
 <h2>Export files for downstream uses</h2>

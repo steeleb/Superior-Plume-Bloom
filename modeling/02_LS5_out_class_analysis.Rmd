@@ -34,8 +34,8 @@ outlier dataset to be able to pre-emptively toss out scenes when we go to apply
 the classification algorithm.
 
 ```{r}
-harmonize_version = "v2024-04-17"
-outlier_version = "v2024-04-17"
+harmonize_version = "v2024-04-24"
+outlier_version = "v2024-04-25"
 
 LS5 <- read_rds(paste0("data/labels/harmonized_LS57_labels_", harmonize_version, ".RDS")) %>% 
   filter(mission == "LANDSAT_5")

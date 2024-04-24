@@ -114,7 +114,7 @@ for i in range(dates_sen.length().getInfo()):
   one_image_bands = (s2
     .filterDate(one_dt, one_dt.advance(1, 'day'))
     .select(["SR_.*"])
-    .mean())
+    .mosaic())
   one_image_qa = (s2
     .filterDate(one_dt, one_dt.advance(1, 'day'))
     .select(['MSK_CLDPRB', 'MSK_SNWPRB', 'cirrus', 'opaque', 'dark_pixel', 'cloud_shadow', 'water',

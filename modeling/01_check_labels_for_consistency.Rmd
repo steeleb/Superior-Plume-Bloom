@@ -45,7 +45,8 @@ data from the workflow and note that this is an imperfect process.
 ## Load data
 
 ```{r}
-harmonize_version = "v2024-04-17"
+add_data_date = "2024-04-24"
+harmonize_version = "v2024-04-24"
 ```
 
 ### Label data
@@ -54,6 +55,8 @@ Walk through the file paths and read in the label data:
 
 ```{r}
 label_files <- list.files("data/labels", pattern = "labels_with", full.names = T)
+label_files <- label_files[grepl(add_data_date, label_files)]
+
 label_names <- map(label_files, 
                    function(file) {
                      str_sub(file,
@@ -72,6 +75,8 @@ Do the same for the scene-level metadata:
 
 ```{r}
 metadata_files <- list.files("data/labels", pattern = "metadata", full.names = T)
+metadata_files <- metadata_files[grepl(add_data_date, metadata_files)]
+
 meta_names <- map(metadata_files, 
                   function(file) {
                     str_sub(file,
@@ -294,7 +299,7 @@ full_join(LS89_totals, LS89_mis_totals) %>%
 ```
 
 Okay, all of these come from two contributors, with overlap with the LS57 labels
-mislabels.
+mislabels volunteer
 
 ### Sentinel 2
 
@@ -310,9 +315,7 @@ S2 <- labels$SEN2 %>%
          B4 = Red, 
          B5, B6, B7, B8, B11, B12,
          # re-pull columns
-         starts_with("SR"), 
-         cirrus, opaque_cloud, starts_with("QA"), 
-         starts_with("MSK")) %>% 
+         starts_with("SR")) %>% 
   # drop mission column for proper joining (there is no way to distinguish Sentinel
   # a and b missions, and the dates are unique)
   select(-mission) %>% 
@@ -346,27 +349,6 @@ labels$SEN2 %>%
 Well, hopefully the data from the mis-matched contributors in Landsat have valid
 data here.
 
-## Convert binary QA columns
-
-Here, we're just converting any of the QA integer columns back to binary.
-
-```{r}
-LS57 <- LS57 %>% 
-  mutate(across(c(SR_CLOUD_QA, QA_PIXEL, QA_RADSAT),
-                ~ R.utils::intToBin(.),
-                .names = "{.col}_binary")) 
-
-LS89 <- LS89 %>% 
-  mutate(across(c(SR_QA_AEROSOL, QA_PIXEL, QA_RADSAT),
-                ~ R.utils::intToBin(.),
-                .names = "{.col}_binary")) 
-
-S2 <- S2 %>% 
-    mutate(across(c(QA10, QA20, QA60),
-                ~ R.utils::intToBin(.),
-                .names = "{.col}_binary")) 
-
-```
 
 ## Export files for downstream uses
 
