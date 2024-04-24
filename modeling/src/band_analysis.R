@@ -5,6 +5,12 @@ LS57_ee <- c("SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7")
 LS89_user <- c("B2", "B3", "B4", "B5", "B6", "B7")
 LS89_ee <- c("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7")
 
+S2_user <- c("B2",  "B3", "B4", "B5", "B6", "B7", "B8", "B11", "B12")
+S2_ee <- c("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", 
+           "SR_B7", "SR_B8", "SR_B11", "SR_B12")
+S2_ee_all <- c("SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", 
+               "SR_B7", "SR_B8", "SR_B8A", "SR_B11", "SR_B12")
+
 
 make_band_comp_plot <- function(user_band, ee_band, data, mission) {
   data %>% 

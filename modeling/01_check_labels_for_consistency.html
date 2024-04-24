@@ -456,6 +456,13 @@ LS89_metadata &lt;- metadata$LS8_LS9 %&gt;%
             mean_cloud_cover = mean(CLOUD_COVER),
             max_cloud_cover = max(CLOUD_COVER))
 
+# list all the numeric cols that we care about for S2
+numeric_cols &lt;- c(&quot;AOT_RETRIEVAL_ACCURACY&quot;, &quot;CLOUDY_PIXEL_PERCENTAGE&quot;,
+                  &quot;CLOUD_COVERAGE_ASSESSMENT&quot;, &quot;CLOUD_SHADOW_PERCENTAGE&quot;,
+                  &quot;DARK_FEATURES_PERCENTAGE&quot;, &quot;HIGH_PROBA_CLOUDS_PERCENTAGE&quot;,
+                  &quot;MEDIUM_PROBA_CLOUDS_PERCENTAGE&quot;, &quot;NODATA_PIXEL_PERCENTAGE&quot;,
+                  &quot;SATURATED_DEFECTIVE_PIXEL_PERCENTAGE&quot;, &quot;SNOW_ICE_PERCENTAGE&quot;,
+                  &quot;THIN_CIRRUS_PERCENTAGE&quot;, &quot;WATER_VAPOUR_RETRIEVAL_ACCURACY&quot; )
 S2_metadata &lt;- metadata$SEN2 %&gt;% 
   select(mission, date,
          AOT_RETRIEVAL_ACCURACY,
@@ -468,13 +475,13 @@ S2_metadata &lt;- metadata$SEN2 %&gt;%
   group_by(mission, date) %&gt;% 
   summarise(across(where(is.character),
                    ~ paste(unique(na.omit(.)), collapse = &quot;; &quot;)),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ mean(.), 
                    .names = &quot;{.col}_mean&quot;),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ max(.), 
                    .names = &quot;{.col}_max&quot;),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ min(.),
                    .names = &quot;{.col}_min&quot;),
             n_tiles = n()) %&gt;% 

@@ -130,6 +130,13 @@ LS89_metadata <- metadata$LS8_LS9 %>%
             mean_cloud_cover = mean(CLOUD_COVER),
             max_cloud_cover = max(CLOUD_COVER))
 
+# list all the numeric cols that we care about for S2
+numeric_cols <- c("AOT_RETRIEVAL_ACCURACY", "CLOUDY_PIXEL_PERCENTAGE",
+                  "CLOUD_COVERAGE_ASSESSMENT", "CLOUD_SHADOW_PERCENTAGE",
+                  "DARK_FEATURES_PERCENTAGE", "HIGH_PROBA_CLOUDS_PERCENTAGE",
+                  "MEDIUM_PROBA_CLOUDS_PERCENTAGE", "NODATA_PIXEL_PERCENTAGE",
+                  "SATURATED_DEFECTIVE_PIXEL_PERCENTAGE", "SNOW_ICE_PERCENTAGE",
+                  "THIN_CIRRUS_PERCENTAGE", "WATER_VAPOUR_RETRIEVAL_ACCURACY" )
 S2_metadata <- metadata$SEN2 %>% 
   select(mission, date,
          AOT_RETRIEVAL_ACCURACY,
@@ -142,13 +149,13 @@ S2_metadata <- metadata$SEN2 %>%
   group_by(mission, date) %>% 
   summarise(across(where(is.character),
                    ~ paste(unique(na.omit(.)), collapse = "; ")),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ mean(.), 
                    .names = "{.col}_mean"),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ max(.), 
                    .names = "{.col}_max"),
-            across(where(is.numeric),
+            across(all_of(numeric_cols),
                    ~ min(.),
                    .names = "{.col}_min"),
             n_tiles = n()) %>% 
