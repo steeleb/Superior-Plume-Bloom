@@ -32,7 +32,7 @@ Also, identify the version date we're interested in:
 # date for original collation
 og_collation_date = "2023-07-20"
 # date for secondary collation
-add_data_date = "2024-04-24"
+add_data_date = "2024-04-25"
 ```
 
 ## Download collated files from eePlumB users
@@ -73,7 +73,7 @@ munging later.
 
 ```{r}
 # get a list of the added band data
-add_data_list <- drive_ls(path = "eePlumB_additional_band_data", pattern = "_v2024-04-24.csv")
+add_data_list <- drive_ls(path = "eePlumB_additional_band_data", pattern = "_v2024-04-25.csv")
 
 process_new_labels_by_mission <- function(mission_text) {
   txt_for_grepl <- str_replace(mission_text, "_", "|")

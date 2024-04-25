@@ -61,7 +61,7 @@ use B7/SR_B7 as a reference to filter inconsistent labels
 
 ```{r}
 LS5_inconsistent <- LS5 %>% 
-  filter((is.na(SR_B7) | SR_B7 != B7))
+  filter(is.na(SR_B7) | !between(B7, SR_B7-0.001, SR_B7+0.001))
 
 LS5_inconsistent %>% 
   group_by(class) %>% 
@@ -69,31 +69,26 @@ LS5_inconsistent %>%
   kable()
 ```
 
-Most of these are cloud labels, where the pixel is saturated, and then masked in
-the re-pull value (resulting in an NA). Let's drop those from this subset and
-then look more.
+It looks like most of these of these are pixels that were saturated and masked out in the
+re-pull.
 
 ```{r}
-LS5_inconsistent <- LS5_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B7))) 
+LS5_inconsistent %>% 
+  filter(!is.na(SR_B7)) %>% 
+  nrow()
 ```
 
-This leaves `r round(nrow(LS5_inconsistent)/nrow(LS5)*100, 1)`% of the Landsat 5
-labels as inconsistent. Let's do a quick sanity check to make sure that we've
-dropped values that are inconsistent between pulls:
+Let's see if there is any consistent scene that these values are different:
 
 ```{r}
-LS5_filtered <- LS5 %>% 
-  filter(# filter data where SR_B7 has data and where the values match between the two
-         # pulls.
-         (!is.na(SR_B7) & SR_B7 == B7) | 
-           # or where the user-specified class is cloud and the pixel was saturated
-           # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B7) ),
-         # or where any re-pulled band value is greater than 1, which isn't a valid value
-         if_all(LS57_ee,
-                ~ . <= 1)) 
+LS5_inconsistent %>% 
+  filter(!is.na(SR_B7)) %>% 
+  group_by(date, vol_init) %>% 
+  summarise(n_labels = n()) %>% 
+  arrange(-n_labels)
+
 ```
+
 
 And plot:
 
@@ -105,12 +100,12 @@ pmap(.l = list(user_band = LS57_user,
      .f = make_band_comp_plot)
 ```
 
-There's still a couple of mis-matched data points in here, seen in B4, so we'll
+There's still a couple of mis-matched data points in here, seen in B3, so we'll
 put those over into inconsistent, too.
 
 ```{r}
 LS5_inconsistent <-  LS5_filtered %>% 
-  filter(B4 != SR_B4) %>% 
+  filter(!between(B4, SR_B4+0.001, SR_B4-0.001)) %>% 
   bind_rows(., LS5_inconsistent)
 LS5_filtered <- LS5_filtered %>% 
   filter(B4 == SR_B4) 

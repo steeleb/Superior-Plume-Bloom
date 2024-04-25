@@ -45,8 +45,8 @@ data from the workflow and note that this is an imperfect process.
 ## Load data
 
 ```{r}
-add_data_date = "2024-04-24"
-harmonize_version = "v2024-04-24"
+add_data_date = "2024-04-25"
+harmonize_version = "2024-04-24"
 ```
 
 ### Label data
