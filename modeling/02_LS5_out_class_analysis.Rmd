@@ -34,8 +34,8 @@ outlier dataset to be able to pre-emptively toss out scenes when we go to apply
 the classification algorithm.
 
 ```{r}
-harmonize_version = "v2024-04-24"
-outlier_version = "v2024-04-25"
+harmonize_version = "2024-04-25"
+outlier_version = "2024-04-25"
 
 LS5 <- read_rds(paste0("data/labels/harmonized_LS57_labels_", harmonize_version, ".RDS")) %>% 
   filter(mission == "LANDSAT_5")
@@ -46,7 +46,9 @@ LS5 <- read_rds(paste0("data/labels/harmonized_LS57_labels_", harmonize_version,
 Just look at the data to see consistent (or inconsistent) user-pulled data and
 our pull, here, our user data are in "BX" format and the re-pull is in "SR_BX"
 format. These are steps to assure data quality if the volunteer didn't follow
-the directions explicitly.
+the directions explicitly, or if there are differences in the re-pull. The re-pull 
+masks out saturated pixels, so any instance where the "SR_BX" value is NA indicates
+that the pixel was saturated in at least one band.
 
 ```{r, echo=FALSE}
 pmap(.l = list(user_band = LS57_user,
@@ -56,12 +58,13 @@ pmap(.l = list(user_band = LS57_user,
      .f = make_band_comp_plot)
 ```
 
-There is some mis-match here, let's look at those data, in this case, we'll just
-use B7/SR_B7 as a reference to filter inconsistent labels
+There is some mis-match here, let's filter any labels where at least one band value
+doesn't match between the user pull and the re-pull.
 
 ```{r}
 LS5_inconsistent <- LS5 %>% 
-  filter(is.na(SR_B7) | !between(B7, SR_B7-0.001, SR_B7+0.001))
+  filter(is.na(SR_B7) | B1 != SR_B1 | B2 != SR_B2 | B3 != SR_B3 | 
+           B4 != SR_B4 | B5 != SR_B5 | B7 != SR_B7)
 
 LS5_inconsistent %>% 
   group_by(class) %>% 
@@ -69,26 +72,29 @@ LS5_inconsistent %>%
   kable()
 ```
 
-It looks like most of these of these are pixels that were saturated and masked out in the
-re-pull.
+Most of these are cloud labels, where the pixel is saturated, and then masked in
+the re-pull value (resulting in an NA). Let's drop those from this subset and
+then look more.
 
 ```{r}
-LS5_inconsistent %>% 
-  filter(!is.na(SR_B7)) %>% 
-  nrow()
+LS5_inconsistent <- LS5_inconsistent %>% 
+  filter(!is.na(SR_B7)) 
 ```
 
-Let's see if there is any consistent scene that these values are different:
+This leaves `r round(nrow(LS5_inconsistent)/nrow(LS5)*100, 1)`% of the Landsat
+7 labels as inconsistent. Let's do a quick sanity check to make sure that we've
+dropped values that are inconsistent between pulls and where any band value is
+greater than 1:
 
 ```{r}
-LS5_inconsistent %>% 
-  filter(!is.na(SR_B7)) %>% 
-  group_by(date, vol_init) %>% 
-  summarise(n_labels = n()) %>% 
-  arrange(-n_labels)
-
+LS5_filtered <- LS5 %>% 
+  filter(# filter data where the repull data and user data match
+         (B1 == SR_B1 & B2 == SR_B2 & B3 == SR_B3 & 
+           B4 == SR_B4 & B5 == SR_B5 & B7 == SR_B7),
+         # or where any re-pulled band value is greater than 1, which isn't a valid value
+         if_all(LS57_ee,
+                ~ . <= 1))
 ```
-
 
 And plot:
 
@@ -98,17 +104,6 @@ pmap(.l = list(user_band = LS57_user,
                data = list(LS5_filtered),
                mission = list("LANDSAT_5")),
      .f = make_band_comp_plot)
-```
-
-There's still a couple of mis-matched data points in here, seen in B3, so we'll
-put those over into inconsistent, too.
-
-```{r}
-LS5_inconsistent <-  LS5_filtered %>% 
-  filter(!between(B4, SR_B4+0.001, SR_B4-0.001)) %>% 
-  bind_rows(., LS5_inconsistent)
-LS5_filtered <- LS5_filtered %>% 
-  filter(B4 == SR_B4) 
 ```
 
 And now let's look at the data by class:
@@ -123,11 +118,12 @@ pmap(.l = list(data = list(LS5_filtered),
 We aren't actually modeling "other" (not sufficient observations to classify) or
 "shorelineContamination" (we'll use this later to block areas where there is
 likely shoreline contamination in the AOI), so let's drop those categories and
-look at the data again.
+look at the data again. We'll also drop the B1-B7 columns here.
 
 ```{r}
 LS5_for_class_analysis <- LS5_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination")))
+  filter(!(class %in% c("other", "shorelineContamination"))) %>% 
+  select(-c(B1:B7))
 ```
 
 ```{r, echo=FALSE}
@@ -144,6 +140,7 @@ labels.
 
 ```{r, echo = FALSE}
 LS5_inconsistent %>% 
+  filter(!is.na(SR_B1)) %>% 
   group_by(vol_init) %>% 
   summarise(n_tot_labs = n(),
             n_dates = length(unique(date))) %>% 
@@ -193,8 +190,7 @@ unique(outliers$class)
 ```
 
 Okay, `r nrow(outliers)` of extreme outliers (\>1.5\*IQR) out of
-`r nrow(LS5_for_class_analysis)` total labels - and they are all from non-cloud
-groups.
+`r nrow(LS5_for_class_analysis)` total labels across non-cloud classes.
 
 ### Systemic contributor/scene errors
 
@@ -203,7 +199,6 @@ dataset?
 
 ```{r, echo = FALSE}
 LS5_vol <- LS5_for_class_analysis %>% 
-  filter(class != "cloud") %>% 
   group_by(vol_init) %>% 
   summarise(n_tot = n()) %>% 
   arrange(-n_tot)
@@ -217,9 +212,10 @@ full_join(LS5_vol, LS5_out_vol) %>%
   kable()
 ```
 
-These aren't terrible. At/below 10%, nothing egregious.
+These aren't terrible. All below 10%, nothing egregious.
 
-How many of these outliers are in specific scenes?
+How many of these outliers are in specific scenes? For the purposes of comparison,
+we'll drop the cloud groups.
 
 ```{r, echo=FALSE}
 LS5_out_date <- outliers %>% 
@@ -236,7 +232,7 @@ LS5_out_date <- left_join(LS5_out_date, LS5_date) %>%
 kable(LS5_out_date)
 ```
 
-There are two scenes here that have very high outliers (\> 20% of total
+There are two scenes here that have a higher proportion of outliers (\> 20% of total
 labels) - perhaps there is something about the AC in these particular scenes? or
 the general scene quality? Let's look at the scene-level metadata:
 
@@ -250,15 +246,7 @@ LS5_out_date %>%
   kable()
 ```
 
-This isn't terribly helpful, there is a range of `IMAGE_QUALITY`, there are
-ranges of `CLOUD_COVER`, otherwise metadata is basically the same (but to broad
-to make a distinction for exclusion). While I feel fine dropping these two scenes
-from the training dataset, we need a systematic way to make sure we don't apply
-the algo to similar scenes. If there isn't anything common in the metadata, we
-would need to mask pixels by band ranges that are present in the training set
-(as those are the ones we have confidence in) or flag pixels that we aren't
-confident in after the fact (because they are outside of the range used for the
-training dataset).
+This isn't terribly helpful, we still need to dig a little more.
 
 How many bands are outliers when the data are aggregated back to label? If there
 is a large portion of outliers amongst the RGB bands (how users labeled data),
@@ -299,29 +287,62 @@ error? Atmospheric correction?
 ![](images/LS5_1988-11-23.png)
 
 This looks super hazy, so that may be the issue with this particular scene.
-Unfortunately, there is no way to know this from the scene metadata. The
-SR_ATMOS_OPACITY value is low (this is supposed to indicate the skies are
-clear), the cirrus confidence is low (but it's also low for a majority of the
-labels in this dataset). Reanalysis for this, or dense dark vegetation
-estimation for aerosol stand-in in LEDAPS may be the culprit - or it could be
-something to do with surrounding bright snow-covered land that impacts the Rrs
-values of pixels. This is probably a reason to avoid categorizing LS5 images
-during winter months, and that bright snow along the shoreline may cause issues
-with classification.
+Unfortunately, there is no way to know this from the scene metadata. Let's see
+if the SR_ATMOS_OPACITY value is helpful at all:
+
+```{r}
+outliers %>% 
+  filter(date == "1988-11-23") %>% 
+  pluck("SR_ATMOS_OPACITY") %>% 
+  range(., na.rm = T)
+```
+
+These values are pretty low (this is supposed to indicate hazy conditions), 
+let's look at cirrus confidcence across these labels, too:
+
+```{r}
+outliers %>% 
+    filter(date == "1988-11-23") %>% 
+  pluck("cirrus_conf") %>% 
+  range(., na.rm = T)
+```
+
+Nothing here. How about cloud_conf?
+
+```{r}
+outliers %>% 
+    filter(date == "1988-11-23") %>% 
+  pluck("cloud_conf") %>% 
+  range(., na.rm = T)
+```
+
+This is low confidence (bit value of 1). How about dialated clouds?
+
+```{r}
+outliers %>% 
+    filter(date == "1988-11-23") %>% 
+  pluck("dialated_cloud") %>% 
+  range(., na.rm = T)
+```
+
+Nope.
+
+While there doesn't seem to be a systematic way of detecting the haze issue in
+this scene (or with the labeled pixels), it is clear that there is an issue with 
+this scene. It's also possible that the surrounding bright snow causes issues with
+the Rrs calculation. 
 
 ### QA Pixels
 
-Do any of the labels have QA pixel indications of cloud or cloud shadow? The
-first pass here is for all data that don't have a label of "cloud" (not just
-outliers). Let's see if the medium certainty classification in the QA band is
-useful here:
+Do any of the labels have QA pixel indications of contamination? Let's see if 
+the medium certainty classification in the QA band is useful here:
 
 ```{r}
 LS5_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) %in% c(10, 11)  ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) %in% c(10, 11)  ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6) %in% c(10, 11)  ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8) %in% c(10, 11)  ~ "cloud",
+  mutate(QA = case_when(cirrus_conf >=2 ~ "cirrus",
+                   snowice_conf >= 2 ~ "snow/ice",
+                   cloudshad_conf >= 2 ~ "cloud shadow",
+                   cloud_conf >= 2 ~ "cloud",
                    TRUE ~ "clear")) %>% 
   group_by(QA) %>% 
   filter(class != "cloud") %>% 
@@ -329,16 +350,14 @@ LS5_for_class_analysis %>%
   kable()
 ```
 
-Well, that's not helpful, considering that most of the label dataset has at
-least a medium confidence cloud QA flag as the pixel QA. Now with only high
-confidence clouds:
+And how about high certainty:
 
 ```{r}
 LS5_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
+  mutate(QA = case_when(cirrus_conf >= 3 ~ "cirrus",
+                   snowice_conf >= 3 ~ "snow/ice",
+                   cloudshad_conf >= 3 ~ "cloud shadow",
+                   cloud_conf >= 3 ~ "cloud",
                    TRUE ~ "clear")) %>% 
   group_by(QA) %>% 
   filter(class != "cloud") %>% 
@@ -346,83 +365,145 @@ LS5_for_class_analysis %>%
   kable()
 ```
 
-Okay, if we use only "high confidence", this seems a little better. Let's look
-at the labels where pixels were classified as snow/ice:
+What about low confidence?
 
 ```{r}
-LS5_snow_ice <- LS5_for_class_analysis %>% 
-  filter(str_sub(QA_PIXEL_binary, 3, 4) == 11,
-         class != "cloud") %>%
+LS5_for_class_analysis %>% 
+  mutate(QA = case_when(snowice_conf >= 1 ~ "snow/ice",
+                   cloudshad_conf >= 1 ~ "cloud shadow",
+                   cirrus_conf >= 1 ~ "cirrus",
+                   cloud_conf >= 1 ~ "cloud",
+                   TRUE ~ "clear")) %>% 
+  group_by(QA) %>% 
+  filter(class != "cloud") %>% 
+  summarize(n_tot = n()) %>% 
+  kable()
+```
+
+Low confidence is NOT helpful! Let's move forward with medium confidence and look at the
+flagged data from all classes except cloud:
+
+```{r}
+LS5_qa_flagged <- LS5_for_class_analysis %>% 
+  filter((cirrus_conf >= 2 |
+           snowice_conf >= 2 |
+           cloudshad_conf >= 2 |
+           cloud_conf >= 2),
+    class != "cloud") %>%
   group_by(date, vol_init) %>% 
-  summarise(n_snow_ice = n()) %>% 
-  arrange(-n_snow_ice)
+  summarise(n_qa_flagged = n()) %>% 
+  arrange(-n_qa_flagged)
 LS5_tot <- LS5_for_class_analysis %>% 
   group_by(date, vol_init) %>% 
   filter(class != "cloud") %>% 
   summarise(n_tot_labels = n())
-left_join(LS5_snow_ice, LS5_tot) %>% 
-  mutate(percent_snow_ice = round(n_snow_ice/n_tot_labels*100, 1)) %>% 
-  arrange(-percent_snow_ice) %>% 
+left_join(LS5_qa_flagged, LS5_tot) %>% 
+  mutate(percent_qa_flagged = round(n_qa_flagged/n_tot_labels*100, 1)) %>% 
+  arrange(-percent_qa_flagged) %>% 
   kable()
 ```
 
-We don't want to be using data that's flagged as snow/ice nor are we going to
-classify pixels that are snow/ice, so let's see what classes are represented in
-the pixels with snow/ice QA designations. Let's look at that image on 1987-11-05
-to see if there is visible ice:
+We don't want to be using data that has QA flags for any pixel that isn't labeled
+cloud. Let's look at the four images with >20% QA flag labels:
 
+**1987-11-05**
 ![](images/LS5_1987-11-05.png)
-
-I don't see instances of ice/snow here... I suspect that when the QA bit
-misclassifies as snow/ice, there may be a systemic issue (maybe from the bright
-clouds?) To be conservative, I think we should drop this scene, especially since
-more than 50% of the labels have a snow/ice flag associated with them. I don't
-believe that the QA pixel is used to assign atmospheric correction, so I think
-only dropping the egregious one here is acceptable.
-
-Let's also look at the cirrus flagged pixels:
-
 ```{r}
 LS5_for_class_analysis %>% 
-  filter(str_sub(QA_PIXEL_binary, 1, 2) == 11,
-         class != "cloud") %>% 
-  group_by(date, vol_init) %>% 
-  summarise(n_cirrus = n()) %>% 
-  arrange(-n_cirrus) %>% 
-  left_join(., LS5_tot) %>% 
-  mutate(percent_cirrus = round(n_cirrus/n_tot_labels*100, 1)) %>% 
-  arrange(-percent_cirrus) %>% 
-  kable() 
+  filter(date == "1987-11-05", class != "cloud",
+         (cirrus_conf >= 2 |
+           snowice_conf >= 2 |
+           cloudshad_conf >= 2 |
+           cloud_conf >= 2)) %>% 
+  select(class, SR_ATMOS_OPACITY, cirrus_conf, cloud_conf, cloudshad_conf, snowice_conf) %>% 
+  kable()
 ```
 
-Let's look at the 1993-06-30 image:
+These are entirely cloud shadow flags, which makes sense given the extent and 
+pattern of clouds. This scene does not seem contaminated with haze (which is 
+confimred) by SR_ATMOS_OPACITY values < 0.1.
+
+**1993-06-30**
 
 ![](images/LS5_1993-06-30.png)
 
-Yeah, that looks pretty hazy to me! Let's get a reminder of what the metadata 
-is for this scene:
-
 ```{r}
 LS5_for_class_analysis %>% 
-  filter(date == "1993-06-30") %>% 
-  select(date, vol_init, DATA_SOURCE_AIR_TEMPERATURE:max_cloud_cover) %>% 
-  distinct() %>% 
+  filter(date == "1993-06-30", class != "cloud",
+         (cirrus_conf >= 2 |
+           snowice_conf >= 2 |
+           cloudshad_conf >= 2 |
+           cloud_conf >= 2)) %>% 
+  select(class, SR_ATMOS_OPACITY, cirrus_conf, cloud_conf, cloudshad_conf, snowice_conf) %>% 
   kable()
 ```
 
-Okay, I think the combination of lower image quality and high cloud cover here may
-be meaningful. We should drop any labels that have a cirrus QA flag that aren't 
-cloud labels, and be weary of scenes with high (> 60%) cloud cover and lower image
-quality (< 9).
+Most of these are high opacity values, indicating some cirrus-type contamination.
+Additionally, there is some mis classification of snow and ice here. As indicated
+by the opacity values and the qa flags, these pixels should be dropped. SR_ATOMS_OPACITY greater
+than 0.3 indicate haze or other cloud presence.
+
+```{r}
+LS5_for_class_analysis %>% 
+  filter(date == "1993-06-30", class != "cloud") %>% 
+  pluck("SR_ATMOS_OPACITY") %>% 
+  range()
+```
+
+
+**1990-06-06**
+
+![](images/LS5_1990-06-06.png)
+```{r}
+LS5_for_class_analysis %>% 
+  filter(date == "1990-06-06", class != "cloud",
+         (cirrus_conf >= 2 |
+           snowice_conf >= 2 |
+           cloudshad_conf >= 2 |
+           cloud_conf >= 2)) %>% 
+  select(class, SR_ATMOS_OPACITY, cirrus_conf, cloud_conf, cloudshad_conf, snowice_conf) %>% 
+  kable()
+```
+
+Mostly cloud and cloud shadow here. Atmospheric opacity is a bit lower, but still
+some that will need to be removed from the training dataset.
+
+**1998-10-02**
+
+![](images/LS5_1998-10-02.png)
+```{r}
+LS5_for_class_analysis %>% 
+  filter(date == "1998-10-02", class != "cloud",
+         (cirrus_conf >= 2 |
+           snowice_conf >= 2 |
+           cloudshad_conf >= 2 |
+           cloud_conf >= 2)) %>% 
+  select(class, SR_ATMOS_OPACITY, cirrus_conf, cloud_conf, cloudshad_conf, snowice_conf) %>% 
+  kable()
+```
+
+It's clear there is a bit of haze in this image, that is confirmed by opacity values,
+though the opacity is till below the 0.3 cutoff. Using the QA bits here to remove 
+medium and high confidence QA flags should resolve any contamination. Let's
+also look at the range of atmoshperic opacity across all labels in this scene:
+
+```{r}
+LS5_for_class_analysis %>% 
+  filter(date == "1998-10-02", class != "cloud") %>% 
+  pluck("SR_ATMOS_OPACITY") %>% 
+  range()
+```
+
+All below the 0.3 threshold. 
 
 And now for the outliers:
 
 ```{r}
 outliers %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
+  mutate(QA = case_when(snowice_conf >= 2 ~ "snow/ice",
+                   cloudshad_conf >= 2 ~ "cloud shadow",
+                   cirrus_conf >= 2 ~ "cirrus",
+                   cloud_conf >= 2 ~ "cloud",
                    TRUE ~ "clear")) %>% 
   group_by(QA) %>% 
   filter(class != "cloud") %>% 
@@ -430,20 +511,14 @@ outliers %>%
   kable()
 ```
 
-Let's look into those cirrus QA bits:
+And let's look at atmospheric opacity:
 
 ```{r}
 outliers %>% 
-  filter(str_sub(QA_PIXEL_binary, 1, 2) == 11,
-         class != "cloud") %>% 
-  group_by(date, vol_init) %>% 
-  summarise(n_out_cirrus = n()) %>% 
-  arrange(-n_out_cirrus) %>% 
-  kable()
+  filter(class != "cloud") %>% 
+  pluck("SR_ATMOS_OPACITY") %>% 
+  range(na.rm = T)
 ```
-
-And there is the 1993-06-30 image from earlier. Again, just toss the labels that
-are flagged as cirrus from the QA bit.
 
 ### Clouds
 
@@ -451,10 +526,10 @@ How many of these outliers have near-pixel clouds (as measured by ST_CDIST)?
 
 ```{r, echo = FALSE}
 LS5_out_CDIST <- outliers %>% 
-  filter(ST_CDIST < 50) 
+  filter(ST_CDIST < 0.5) 
 # compared with the whole dataset 
 LS5_CDIST <- LS5_for_class_analysis %>% 
-  filter(class != "cloud" & ST_CDIST < 50)
+  filter(class != "cloud" & ST_CDIST < 0.5)
 ```
 
 There are `r nrow(LS5_out_CDIST)` labels
@@ -474,22 +549,16 @@ associated with the AOI.
 ```{r, echo = FALSE}
 # max
 LS5_out_max_cloud <- outliers %>% 
-  rowwise() %>% 
-  filter(max_cloud_cover > 75) %>% 
-  pluck("CLOUD_COVER") %>% 
-  unique()
+  filter(max_cloud_cover > 75)
 # compared with the whole dataset 
 LS5_max_cloud <- LS5_for_class_analysis %>% 
-  rowwise() %>% 
   filter(class != "cloud" & max_cloud_cover > 75) 
 
 # mean
 LS5_out_mean_cloud <- outliers %>% 
-  rowwise() %>% 
   filter(mean_cloud_cover > 60) 
 # compared with the whole dataset 
 LS5_mean_cloud <- LS5_for_class_analysis %>% 
-  rowwise() %>% 
   filter(class != "cloud" & mean_cloud_cover > 60) 
 ```
 
@@ -501,39 +570,21 @@ cloud cover was \> 50%. The filtered dataset contains `r nrow(LS5_max_cloud)`
 (`r round(nrow(LS5_max_cloud)/nrow(LS5_for_class_analysis)*100, 1)`%) where max
 was \>75% and `r nrow(LS5_mean_cloud)`
 (`r round(nrow(LS5_mean_cloud)/nrow(LS5_for_class_analysis)*100, 1)`%) where the
-mean cloud cover was \> 50%. While there is a greater instance of higher
-CLOUD_COVER in the outliers, it's not a large enough portion of the outlier
-dataset to say that we should just toss scenes of either case above.
-
-### RadSat QA bit
-
-Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull, 
-we masked satruated pixels, so this should be zero.
-
-```{r}
-LS5_for_class_analysis %>% 
-  mutate(radsat = if_else(QA_RADSAT == 0,
-                           "n",
-                           "y")) %>% 
-  group_by(radsat) %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
-```
-
-Great! No bands are saturated!
+mean cloud cover was \> 50%. Neither of these metrics seem helpful in elimination
+of labels from outlier scenes.
 
 ### Training dataset implications
 
-For the purposes of training data, I think we can throw out the data from the
-1988-11-23 and 1987-11-05 scenes, any non-cloud classes that are flagged as
-snow/ice or cirrus. All other outliers should be retained, in my opinion.
+Based on the above review, any label with SR_ATMOS_OPACITY value >= 0.3, or a QA
+flag for clouds, cloud shadow, or snow ice should be eliminated from this dataset.
 
 ```{r}
 LS5_training_labels <- LS5_for_class_analysis %>% 
-  filter(!(date %in% c("1988-11-23", "1987-11-05")),
-         !(str_sub(QA_PIXEL_binary, 1, 2) == 11 & class != "cloud"),
-         !(str_sub(QA_PIXEL_binary, 3, 4) == 11 & class != "cloud"))
+  filter(class == "cloud" |
+           (SR_ATMOS_OPACITY < 0.3 &
+            cloud_conf < 2 &
+            cloudshad_conf <2 & 
+            snowice_conf <2))
 ```
 
 ## Testing for inter-class differences
@@ -597,6 +648,20 @@ There is some consistency here: "darkNearShoreSediment" is often not different
 from other sediment types by band. It is entirely possible that band
 interactions overpower these non-significant differences.
 
+Let's look at the boxplots for the training labels, dropping the cloud labels to
+see the ranges better:
+
+```{r}
+LS5_training_labels_no_clouds <- LS5_training_labels %>% 
+  filter(class != "cloud")
+pmap(.l = list(data = list(LS5_training_labels_no_clouds),
+               data_name = list("LANDSAT_5"),
+               band = LS57_ee),
+     .f = make_class_comp_plot)
+```
+
+There are `r nrow(LS5_class_analysis$SR_B1$outliers)` outliers in SR_B1, `r nrow(LS5_class_analysis$SR_B2$outliers)` in SR_B2, `r nrow(LS5_class_analysis$SR_B3$outliers)` in SR_B3, `r nrow(LS5_class_analysis$SR_B4$outliers)` in SR_B4, `r nrow(LS5_class_analysis$SR_B5$outliers)` in SR_B5, and `r nrow(LS5_class_analysis$SR_B7$outliers)` in SR_B7.
+
 ```{r, echo=FALSE, fig.dim=c(10,10), fig.cap="DNSS: dark near shore sediment, LNSS: light near shore sediment, OSS: offshore sediment"}
 LS5_training_labels %>% 
   mutate(class_short = case_when(class == "darkNearShoreSediment" ~ "DNSS",
@@ -635,15 +700,9 @@ to pick up on subtle differences.
 
 Things to note for Landsat 5:
 
--   when neighboring land is covered in snow, it's possible that the Rrs data
-    will be brighter than usual (but our n = 1 here, so this is more of a
-    warning)
+-   pixels with QA flags should be dismissed from model application
 
--   pixels with a QA bit of cirrus or snow/ice should be masked when applying
-    the algorithm
-
--   a combination of higher cloud cover and lower image quality may be a reason
-    to exclude a scene (again, n = 1)
+-   pixels with SR_ATMOS_OPACITY > 0.3 should be dismissed from model application
 
 ```{r}
 write_rds(LS5_training_labels, paste0("data/labels/LS5_labels_for_tvt_", outlier_version, ".RDS"))

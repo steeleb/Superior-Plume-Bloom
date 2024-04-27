@@ -18,7 +18,8 @@ invisible(lapply(analysis_funcs, source))
 # list/load/download the packages needed for this script
 packages <- c('tidyverse',
               'ggthemes',
-              'janitor')
+              'janitor',
+              'jsonlite')
 invisible(lapply(packages, package_loader))
 ```
 
@@ -46,7 +47,7 @@ data from the workflow and note that this is an imperfect process.
 
 ```{r}
 add_data_date = "2024-04-25"
-harmonize_version = "2024-04-24"
+harmonize_version = "2024-04-25"
 ```
 
 ### Label data
@@ -175,9 +176,10 @@ This section:
 1)  drops any point labels if they contain data from bands that are not present
     in a given satellite mission sensor
 2)  re-orgs the data to a more sensical format
-3)  removes any false precision based on the upstream radiometric bit depth of
+3)  pulls the lat/lon from the .geo column
+4)  removes any false precision based on the upstream radiometric bit depth of
     the sensor
-4)  adds metadata to the label data
+5)  adds metadata to the label data
 
 ### Landsat 5/7
 
@@ -204,10 +206,13 @@ LS57 <- labels$LS5_LS7 %>%
            B5 = B6, 
            B7, 
            # re-pull columns
-           starts_with("SR"), starts_with("ST"), contains("QA")) %>% 
+           starts_with("SR"), starts_with("ST"), contains("_conf"), contains("cloud")) %>% 
   # anything beyond 3 digits is false precision, thanks 8 bit depth.
   mutate(across(c(B1:B7, SR_B1:SR_B7),
                 ~ round(., digits = 3))) %>% 
+  rowwise() %>% 
+  mutate(lon = fromJSON(.geo)$coordinates[1],
+         lat = fromJSON(.geo)$coordinates[2]) %>% 
   left_join(., LS57_metadata)
 
 # and pull aside those points where there was B11 data... for now, just dumping 
@@ -216,6 +221,10 @@ mislabeled_LS57 <- labels$LS5_LS7 %>%
   # provide a unique id for the labels here
   rowid_to_column("user_label_id") %>% 
   filter(!is.na(B11))
+
+# drop the non-LS5/7 columns
+LS57 <- LS57 %>% 
+  select(-c(".geo", "system:time_start", "system:index"))
 
 ```
 
@@ -255,6 +264,7 @@ LS89 <- labels$LS8_LS9 %>%
   mutate(mission = if_else(mission == "LS8",
                            "LANDSAT_8",
                            "LANDSAT_9")) %>% 
+  remove_empty(which = "cols") %>% 
   relocate(date, mission, class, vol_init, user_label_id,
          # rename these for comparison's sake, these were re-named in the js code
          B2 = Blue, 
@@ -264,10 +274,13 @@ LS89 <- labels$LS8_LS9 %>%
          B6, 
          B7,
          # re-pull columns
-         starts_with("SR"), starts_with("ST"), contains("conf"), starts_with("QA")) %>% 
+         starts_with("SR"), starts_with("ST"), contains("conf")) %>% 
   # round to 5 digits here, 16 bits available in LS8&9
   mutate(across(c(B2:B7, SR_B1:SR_B7),
                 ~ round(., digits = 5))) %>% 
+  rowwise() %>% 
+  mutate(lon = fromJSON(.geo)$coordinates[1],
+         lat = fromJSON(.geo)$coordinates[2]) %>% 
   left_join(., LS89_metadata)
 
 # and again, pull out the mislabeled data that we may not do anything with...
@@ -275,6 +288,9 @@ mislabeled_LS89 <- labels$LS8_LS9 %>%
   # provide a unique id for the labels here
   rowid_to_column("user_label_id") %>% 
   filter(!is.na(B11))
+
+LS89 <- LS89 %>% 
+  select(-c("system:index", "system:time_start", ".geo"))
 
 ```
 
@@ -316,15 +332,24 @@ S2 <- labels$SEN2 %>%
          B5, B6, B7, B8, B11, B12,
          # re-pull columns
          starts_with("SR")) %>% 
+  # need to do a quick unit conversion for B11 and B12, which weren't converted
+  # in the user pull to Rrs units.
+  mutate(across(c(B11, B12),
+                ~ .*0.0001)) %>% 
   # drop mission column for proper joining (there is no way to distinguish Sentinel
   # a and b missions, and the dates are unique)
   select(-mission) %>% 
+  remove_empty(which = "cols") %>% 
   # round to 4 digits here - 12 bit depth
   mutate(across(c(B2:B12, SR_B1:SR_B9),
                 ~ round(., digits = 4))) %>% 
+  rowwise() %>% 
+  mutate(lon = fromJSON(.geo)$coordinates[1],
+         lat = fromJSON(.geo)$coordinates[2]) %>% 
   left_join(., S2_metadata) %>% 
   # pull that mission column back to the front
-  relocate(date, mission)
+  relocate(date, mission) %>% 
+  select(-c("system:index", "system:time_start", ".geo"))
 ```
 
 There are no mis-attributed rows in the Sentinel-2 dataset:

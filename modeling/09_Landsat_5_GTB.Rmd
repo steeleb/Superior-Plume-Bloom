@@ -1,7 +1,7 @@
 ---
 title: "eePlumB Develop and Apply GTB for Landsat 5"
 author: "ROSSyndicate"
-date: "2024-01-25"
+date: "2024-04-26"
 output: html_document
 editor_options:
   markdown:
@@ -50,9 +50,13 @@ import ee
 import os
 import time
 import pandas as pd
-import geopandas as gpd
+#import geopandas as gpd
 
-v_date = '2024-01-08'
+import imp
+imp.load_source("gee_funx", "modeling/gee_functions.py")
+import gee_funx as gf
+
+v_date = '2024-04-26'
 ```
 
 ## GEE Setup
@@ -76,14 +80,14 @@ ee.Initialize(project = 'ee-ross-superior')
 These assets were created in the 03_Train_Test_Split.Rmd file
 
 ```{python}
-training_ls5 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/training_ls5")
-testing_ls5 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/testing_ls5")
+training_ls5 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/training_ls5_v2024")
+testing_ls5 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/validation_ls5_v2024")
 ```
 
 ## Train the GTB model
 
 ```{python}
-ls_input_feat = ["Red", "Green", "Blue", "B5", "B6", "B7"]
+ls_input_feat = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
 output_label = "class"
 class_values = (['cloud',
   'openWater',
@@ -191,35 +195,29 @@ performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/outpu
 ### Load the image collection
 
 ```{python}
-# list bandnames; in part for L7 bands to match l8/9
-bn457 = ['SR_B1', 'SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B7', 'QA_RADSAT']
-bn89 = ['SR_B2', 'SR_B3', 'SR_B4', 'SR_B5', 'SR_B6', 'SR_B7', 'QA_RADSAT']
-bn = ['Blue', 'Green', 'Red', 'B5', 'B6', 'B7', 'QA_RADSAT']
+bn = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
 
 # filter stack for desired PRs
 ROWS = ee.List([27, 28])
 
-def applyScaleFactors(image):
-  opticalBands = image.select(bn).multiply(0.0000275).add(-0.2) #note - this applies the offset to QA RADSAT - the 0 value will now be -0.2!
-  return image.addBands(opticalBands, None, True)
-
-
 l5 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
+  .filter(ee.Filter.lt('CLOUD_COVER', 80))
   .filter(ee.Filter.eq('WRS_PATH', 26))
   .filter(ee.Filter.inList('WRS_ROW', ROWS))
-  .filter(ee.Filter.gte('IMAGE_QUALITY', 7))
-  .select(bn457, bn)
-  .map(applyScaleFactors))
+  .filter(ee.Filter.gte('IMAGE_QUALITY', 9))
+  .map(gf.applyScaleFactors))
 ```
 
 Add QA_RADSAT mask to mask where any band was saturated
 
 ```{python}
-def apply_radsat_mask(image):
-  radsat = image.select('QA_RADSAT').eq(-0.2) # this is due to the application of the scaling factor
-  return image.updateMask(radsat)
+l5 = l5.map(gf.apply_radsat_mask)
+```
 
-l5 = l5.map(apply_radsat_mask)
+Mask QA bits
+
+```{python}
+l5 = l5.map(gf.mask_qa_flags)
 ```
 
 ### Load modeling AOIs and clip stack
@@ -255,8 +253,6 @@ l5_aoi = l5.map(clip)
 Load other AOIs to summarize over
 
 ```{python}
-# aoi_no_sc_gpd = gpd.read_file('data/aoi/Superior_AOI_minus_shoreline_contamination.shp')
-# aoi_no_sc_ee = gm.geopandas_to_ee(aoi_no_sc_gpd)
 aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')
 
 aoi_no_sc_area = aoi_no_sc_ee.map(calc_area).aggregate_sum('area_ha')
@@ -338,6 +334,24 @@ uniqueMissDate_l5 = l5_aoi.aggregate_array('missDate').distinct()
 
 ```
 
+### Grab SR_ATMOS_OPACITY
+
+```{python}
+atmos_opac_l5 = l5_aoi.select('SR_ATMOS_OPACITY')
+
+def aggregate_atmos_opac(missDate):
+  mission = ee.String(missDate).slice(0,9)
+  date = ee.String(missDate).slice(10,20)
+  short_stack = (atmos_opac_l5
+    .filter(ee.Filter.eq('SPACECRAFT_ID', mission))
+    .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
+  oneMissDate = short_stack.max().multiply(0.001)
+  return (oneMissDate.set('missDate', missDate))
+
+atmos_opac_list = uniqueMissDate_l5.map(aggregate_atmos_opac)
+atmos_opac = ee.ImageCollection(atmos_opac_list)
+```
+
 ### Create mosaics
 
 ```{python}
@@ -361,123 +375,7 @@ lightStack_l5 = newStack_l5.select([
     'OSSed',
     'dNSSed'
     ])
-
-```
-
-### Calculate area per image and export
-
-```{python}
-#because these geometries are rather large, we have to create a function for each AOI
-def calcArea_aoi(image):
-  areaImage =  (image
-    .multiply(ee.Image.pixelArea()).divide(1e5))
-
-  area = areaImage.reduceRegions(
-    collection = aoi_ee,
-    reducer = ee.Reducer.sum().forEachBand(areaImage),
-    crs = img_crs,
-    crsTransform = img_crsTrans
-  )
-
-  missDate = image.get('missDate')
-
-  # Create a feature with the calculated area and properties
-  a = area.first().set({'missDate': missDate, 
-                        'area_ha': aoi_area_ha, 
-                        'extent': 'aoi'})
-  
-  return ee.FeatureCollection(a)
-
-
-def calcArea_nosc(image):
-  areaImage =  (image
-    .multiply(ee.Image.pixelArea()).divide(1e5)
-    .clip(aoi_no_sc_ee.geometry()))
-  
-  area = areaImage.reduceRegions(
-    collection = aoi_no_sc_ee,
-    reducer = ee.Reducer.sum().forEachBand(areaImage),
-    crs = img_crs,
-    crsTransform = img_crsTrans
-  )
-  
-  missDate = image.get('missDate')
-  
-  # Create a feature with the calculated area and properties
-  a = area.first().set({'missDate': missDate, 
-                        'area_ha': aoi_no_sc_area_ha, 
-                        'extent': 'aoi no sc'})
-  
-  return ee.FeatureCollection(a)
-
-
-def calcArea_sc(image):
-  areaImage =  (image
-    .multiply(ee.Image.pixelArea()).divide(1e5)
-    .clip(aoi_sc_ee.geometry()))
-
-  area = areaImage.reduceRegions(
-    collection = aoi_sc_ee,
-    reducer = ee.Reducer.sum().forEachBand(areaImage),
-    crs = img_crs,
-    crsTransform = img_crsTrans
-  )
-
-  missDate = image.get('missDate')
-
-  # Create a feature with the calculated area and properties
-  a = area.first().set({'missDate': missDate, 
-                        'area_ha': aoi_sc_area_ha, 
-                        'extent': 'shoreline contamination'})
-  
-  return ee.FeatureCollection(a)
-
-```
-
-And then map them over all the stacks
-
-```{python}
-
-allAreas_l5_aoi = lightStack_l5.map(calcArea_aoi)
-
-allAreas_l5_nosc = lightStack_l5.map(calcArea_nosc)
-
-allAreas_l5_sc = lightStack_l5.map(calcArea_sc)
-
-```
-
-
-#### Landsat 5
-
-```{python}
-## export to drive
-export_summary_5_aoi = (ee.batch.Export.table.toDrive(
-  collection = allAreas_l5_aoi,
-  selectors = ['missDate', 'classified', 'cloud', 'openWater', 'lightNSSed','OSSed', 'dNSSed', 'area_ha', 'extent'],
-  description = 'gradientTreeBoost_landsat_5_stack_v' + v_date,
-  folder = 'eePlumB_classification_v2024-01-08',
-  fileFormat = 'csv'))
-
-export_summary_5_aoi.start()
-
-export_summary_5_nosc = (ee.batch.Export.table.toDrive(
-  collection = allAreas_l5_nosc,
-  selectors = ['missDate', 'classified', 'cloud', 'openWater', 'lightNSSed','OSSed', 'dNSSed', 'area_ha', 'extent'],
-  description = 'gradientTreeBoost_landsat_5_stack_nosc_v' + v_date,
-  folder = 'eePlumB_classification_v2024-01-08',
-  fileFormat = 'csv'))
-
-export_summary_5_nosc.start()
-
-
-export_summary_5_sc = (ee.batch.Export.table.toDrive(
-  collection = allAreas_l5_sc,
-  selectors = ['missDate', 'classified', 'cloud', 'openWater', 'lightNSSed','OSSed', 'dNSSed', 'area_ha', 'extent'],
-  description = 'gradientTreeBoost_landsat_5_stack_sc_v' + v_date,
-  folder = 'eePlumB_classification_v2024-01-08',
-  fileFormat = 'csv'))
-
-export_summary_5_sc.start()
+    
 ```
 
 ## Export GeoTiffs to drive
@@ -534,7 +432,7 @@ date_length_5 = len(uniqueMissDate_l5.getInfo())
 for d in range(date_length_5):
   md = uniqueMissDate_l5.get(d)
   print(md.getInfo())
-  print(str(d+1) + ' of ' + str(date_length_7))
+  print(str(d+1) + ' of ' + str(date_length_5))
   image = (newStack_l5
     .filter(ee.Filter.eq('missDate', md))
     .first()
@@ -546,30 +444,6 @@ for d in range(date_length_5):
     region = aoi_ee.geometry(),
     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
     folder = 'GTB_LS5_v'+v_date,
-    scale = 30,
-    crs = img_crs,
-    maxPixels = 1e13)
-  
-  #Check how many existing tasks are running and take a break of 5 mins if it's >10
-  maximum_no_of_tasks(10, 5*60)
-  #Send next task.
-  export_image.start()
-
-for d in range(date_length_5):
-  md = uniqueMissDate_l5.get(d)
-  print(md.getInfo())
-  print(str(d+1) + ' of ' + str(date_length_5))
-  image = (newStack_l5
-    .filter(ee.Filter.eq('missDate', md))
-    .first()
-    .clip(aoi_ee.geometry()))
-  image_new_class = (classifications_to_one_band(image)
-    .select('reclass'))
-  export_image = ee.batch.Export.image.toAsset(
-    image = image_new_class,
-    region = aoi_ee.geometry(),
-    description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    assetId = 'projects/ee-ross-superior/assets/LS5/'+'GTB_LS5)'+str(md.getInfo())+'_v'+v_date,
     scale = 30,
     crs = img_crs,
     maxPixels = 1e13)

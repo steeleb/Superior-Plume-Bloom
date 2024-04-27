@@ -26,16 +26,16 @@ invisible(lapply(packages, package_loader))
 
 # Purpose
 
-This script takes a deep dive into Sentinel 2 labels for a more rigorous analysis
-of inconsistent band data and outliers in the filtered label dataset. Here we
-will determine if any more label data points should be removed from the training
-dataset and whether or not we can glean anything from the metadata in the
-outlier dataset to be able to pre-emptively toss out scenes when we go to apply
-the classification algorithm.
+This script takes a deep dive into Sentinel 2 labels for a more rigorous
+analysis of inconsistent band data and outliers in the filtered label dataset.
+Here we will determine if any more label data points should be removed from the
+training dataset and whether or not we can glean anything from the metadata in
+the outlier dataset to be able to pre-emptively toss out scenes when we go to
+apply the classification algorithm.
 
 ```{r}
-harmonize_version = "v2024-04-17"
-outlier_version = "v2024-04-17"
+harmonize_version = "2024-04-25"
+outlier_version = "2024-04-25"
 
 S2 <- read_rds(paste0("data/labels/harmonized_SEN2_labels_", harmonize_version, ".RDS"))
 ```
@@ -55,12 +55,14 @@ pmap(.l = list(user_band = S2_user,
      .f = make_band_comp_plot)
 ```
 
-There isn't a ton of mis-match here, we'll just use B3/SR_B3 as a reference to
-filter inconsistent labels
+Handful of fliers here, we'll compare across the user-pulled and re-pulled data
+for consistency.
 
 ```{r}
 S2_inconsistent <- S2 %>% 
-  filter(SR_B3 != B3)
+  filter(B2 != SR_B2 | B3 != SR_B3 | 
+           B4 != SR_B4 | B5 != SR_B5 | B6 != SR_B6 | B7 != SR_B7 | 
+           B11 != SR_B11 | B12 != SR_B12)
 
 S2_inconsistent %>% 
   group_by(class) %>% 
@@ -68,9 +70,9 @@ S2_inconsistent %>%
   kable()
 ```
 
-We should see if there is any common contributor or scene here. There were no data
-handling differences between the user-pull and our second pull, so we can't dismiss
-the cloud differences.
+We should see if there is any common contributor or scene here. There were no
+data handling differences between the user-pull and our second pull, so we can't
+dismiss the cloud differences.
 
 ```{r}
 S2_inconsistent %>% 
@@ -85,9 +87,8 @@ special handling necessary here except for removing these from the dataset.
 
 ```{r}
 S2_filtered <- S2 %>% 
-  filter(# filter data where SR_B3/B3 match 
-         SR_B3 == B3,
-         # or where any re-pulled band value is greater than 1, which isn't a valid value
+  anti_join(S2_inconsistent) %>% 
+  filter(# or where any re-pulled band value is greater than 1, which isn't a valid value
          if_all(S2_ee,
                 ~ . <= 1))
 ```
@@ -102,8 +103,6 @@ pmap(.l = list(user_band = S2_user,
      .f = make_band_comp_plot)
 ```
 
-Looks good!
-
 And now let's look at the data by class:
 
 ```{r, echo=FALSE}
@@ -117,11 +116,13 @@ We aren't actually modeling "other" (not sufficient observations to classify) or
 "shorelineContamination" (we'll use this later to block areas where there is
 likely shoreline contamination in the AOI). Additionally, "algalBloom" is likely
 a processing issue, and n is too low to use that data, so we'll drop that class
-as well.
+as well. Finally, we'll drop the user band values since we're done with
+comparisons.
 
 ```{r}
 S2_for_class_analysis <- S2_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination", "algalBloom")))
+  filter(!(class %in% c("other", "shorelineContamination", "algalBloom"))) %>% 
+  select(-c(B2:B12))
 ```
 
 ```{r, echo=FALSE}
@@ -130,9 +131,6 @@ pmap(.l = list(data = list(S2_for_class_analysis),
                band = S2_ee),
      .f = make_class_comp_plot)
 ```
-
-Like with LS8/9 - the classes look pretty similar in distribution (maybe because
-cloud categories are so high). 
 
 ## Outlier handling
 
@@ -170,8 +168,7 @@ unique(outliers$class)
 ```
 
 Okay, `r nrow(outliers)` outliers (\>1.5\*IQR) out of
-`r nrow(S2_for_class_analysis)` - and they are all from non-cloud groups, and
-non of them are light near shore sediment.
+`r nrow(S2_for_class_analysis)` - and they are all from non-cloud groups.
 
 How many of these outliers are in specific scenes?
 
@@ -190,29 +187,76 @@ S2_out_date %>%
   kable()
 ```
 
+There are two images with higher outliers, let's look at them quickly:
+
+**2022-06-23**
+
+![](images/S2_2022-06-23.png)
+
+There's some weird stuff happening here - while this does look like some near
+shore sediment, I think there are also some aerosol issues with this scene. If
+you zoom in on other waterbodies on this date, they have a similar grey-brown
+sheen to them, and if you zoom in on this image, it doesn't look... natural?
+
+**2023-04-11**
+
+![](images/S2_2023-04-11.png)
+
+This is a really cool looking scene. Lots of things going on here: 1) the end of
+ice break up 2) super hazy/cirrus clouds 3) snow on the ground might be affecting
+the SR processes. We should probably ditch this scene, but we'll do that at the
+end. 
+
+### Tile-level metadata
+
 Let's look at the tile-level metadata for the highest scenes here:
 
 ```{r}
 S2_out_date %>% 
-  filter(percent_outlier > 20) %>% 
+  filter(percent_outlier >= 20) %>% 
   select(date, vol_init) %>% 
   left_join(., S2) %>% 
-  select(date, vol_init, GENERAL_QUALITY:WATER_VAPOUR_RETRIEVAL_ACCURACY_min) %>% 
+  select(date, vol_init, GENERAL_QUALITY:RADIOMETRIC_QUALITY, 
+         SNOW_ICE_PERCENTAGE_mean,
+         SNOW_ICE_PERCENTAGE_max,
+         SNOW_ICE_PERCENTAGE_min) %>% 
   distinct() %>% 
   kable()
 ```
 
-Nothing egregious here, at least one of the tiles has a lot of no data in it, but
-that's not uncommon in S2 data. Let's look at that image:
+Some detection of snow/ice in the April image, but since these are aggregated values 
+across multiple tiles, hard to tell what to glean from this.
 
-![](images/S2_2022-06-23.png)
+### Clouds
 
-There's some weird stuff happening here - whiule this does look like some near
-shore sediment, I think there are also some aerosol issues with this scene. If
-you zoom in on other waterbodies on this date, they have a similar grey-brown sheen
-to them, and if you zoom in on this image, it doesn't look... natural?
+How many of these outliers have tile-level cloud metadata with high values?
 
-Let's see if this shows up in any of the QA bit summaries
+```{r, echo = FALSE}
+# cloudy pixel percentage
+S2_out_mean_cloud <- outliers %>% 
+  filter(CLOUDY_PIXEL_PERCENTAGE_mean > 60) 
+# compared with the whole dataset 
+S2_mean_cloud <- S2_for_class_analysis %>% 
+  filter(class != "cloud" & CLOUDY_PIXEL_PERCENTAGE_mean > 60) 
+
+# cirrus percentage
+S2_out_mean_cirrus <- outliers %>% 
+  filter(THIN_CIRRUS_PERCENTAGE_mean > 20) 
+# compared with the whole dataset 
+S2_mean_cirrus <- S2_for_class_analysis %>% 
+  filter(class != "cloud" & THIN_CIRRUS_PERCENTAGE_mean > 20) 
+```
+
+The outlier dataset contains `r nrow(S2_out_mean_cloud)`
+(`r round(nrow(S2_out_mean_cloud)/nrow(outliers)*100, 1)`%) where the mean pixel cloud
+cover was \> 60% and `r nrow(S2_out_mean_cirrus)`
+(`r round(nrow(S2_out_mean_cirrus)/nrow(outliers)*100, 1)`%) where the mean pixel cirrus
+cover was \> 20%. The filtered dataset contains `r nrow(S2_mean_cloud)`
+(`r round(nrow(S2_mean_cloud)/nrow(S2_for_class_analysis)*100, 1)`%) where the mean pixel cloud
+cover was \> 60% and `r nrow(S2_mean_cirrus)`
+(`r round(nrow(S2_mean_cirrus)/nrow(S2_for_class_analysis)*100, 1)`%) where the mean pixel cirrus
+cover was \> 20%. This is a little more helpful than in Landsat images. Higher pixel
+cloud cover and cirrus tend to be in outliers than in the filtered dataset.
 
 ### QA Pixels
 
@@ -220,189 +264,110 @@ Do any of the labels have QA pixel indications of opaque cloud or cirrus?
 
 ```{r}
 S2_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) %in% c(01, 11)  ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) %in% c(01, 11)  ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6) %in% c(01, 11)  ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8) %in% c(01, 11)  ~ "cloud",
-                   TRUE ~ "clear")) %>% 
+  mutate(QA = case_when(cirrus == 1 | cirrus_scl == 1 ~ "cirrus",
+                        hi_prob_cloud == 1 | med_prob_cloud == 1 ~ "cloud",
+                        snow_ice == 1 ~ "snow ice",
+                        opaque == 1 ~ "opaque cloud",
+                        cloud_shadow == 1 ~ "cloud shadow",
+                        dark_pixel == 1 ~ "dark pix",
+                        TRUE ~ "clear")) %>% 
   group_by(QA) %>% 
   filter(class != "cloud") %>% 
   summarize(n_tot = n()) %>% 
   kable()
 ```
 
-Low confidence is much better than medium confidence in LS8 than 5/7 - let's
-check to see that the classes are the same for high confidence:
-
-```{r}
-S2_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
-                   TRUE ~ "clear")) %>% 
-  group_by(QA) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
-```
-
-They are the same! Let's look at the cirrus group to see if there is anything
+Let's look at the cirrus and opaque cloud group to see if there is anything
 egregious:
 
 ```{r}
+S2_tot <- S2_for_class_analysis %>% 
+  group_by(date, vol_init) %>% 
+  summarise(n_tot_labels = n())
 S2_for_class_analysis %>% 
-  filter(str_sub(QA_PIXEL_binary, 1, 2) == 11, 
+  filter(cirrus == 1 | cirrus_scl == 1 | opaque == 1, 
          class != "cloud") %>% 
   group_by(date, vol_init) %>% 
-  summarise(n_cirrus = n()) %>% 
-  arrange(-n_cirrus) %>% 
+  summarise(n_qa_flag = n()) %>% 
+  left_join(S2_tot) %>%
+  mutate(perc_qa_flag = round(n_qa_flag/n_tot_labels*100, 1)) %>% 
+  arrange(-perc_qa_flag) %>% 
   kable()
 ```
 
-Let's look at this scene - there are 8 labels (that aren't clouds) that have a
-cirrus flag:
+The top tow images here are the same from the outlier analysis. I think we'll 
+trust the QA bit to help with all this.
 
-![](images/S2_2022-05-05.png)
+### Aerosol band
 
-This is quite hazy in the SE corner of the AOI, near the Apostles. While we can 
-keep this scene since it is otherwise clear, we will again trust the QA bit to 
-remove high aerosol pixels.
-
-### Clouds
-
-How many of these outliers have near-pixel clouds (as measured by ST_CDIST)?
-
-```{r, echo = FALSE}
-S2_out_CDIST <- outliers %>% 
-  filter(class != "cloud" & ST_CDIST < 50) 
-# compared with the whole dataset 
-S2_CDIST <- S2_for_class_analysis %>% 
-  filter(class != "cloud" & ST_CDIST < 50)
-```
-
-There are `r nrow(S2_out_CDIST)` labels
-(`r round(nrow(S2_out_CDIST)/nrow(outliers)*100, 1)`% of oultiers) that aren't
-"cloud" in the outlier dataset that have a cloud distance \<500m and
-`r nrow(S2_CDIST)` labels
-(`r round(nrow(S2_CDIST)/nrow(S2_for_class_analysis)*100, 1)`%) in the whole
-dataset that have a cloud distance \<500m. This is unhelpful.
-
-How many of the outliers have high cloud cover, as reported by the scene-level
-metadata? Note, we don't have the direct scene cloud cover associated with
-individual labels, rather a list of the scene level cloud cover values
-associated with the AOI.
-
-```{r, echo = FALSE}
-# max
-S2_out_max_cloud <- outliers %>% 
-  rowwise() %>% 
-  filter(max_cloud_cover > 75) 
-# compared with the whole dataset 
-S2_max_cloud <- S2_for_class_analysis %>% 
-  rowwise() %>% 
-  filter(class != "cloud" & max_cloud_cover > 75) 
-
-# mean
-S2_out_mean_cloud <- outliers %>% 
-  rowwise() %>% 
-  filter(mean_cloud_cover > 60) 
-# compared with the whole dataset 
-S2_mean_cloud <- S2_for_class_analysis %>% 
-  rowwise() %>% 
-  filter(class != "cloud" & mean_cloud_cover > 60) 
-```
-
-The outlier dataset contains `r nrow(S2_out_max_cloud)`
-(`r round(nrow(S2_out_max_cloud)/nrow(outliers)*100, 1)`%) where the max cloud
-cover was \> 75% and `r nrow(S2_out_mean_cloud)`
-(`r round(nrow(S2_out_mean_cloud)/nrow(outliers)*100, 1)`%) where the mean
-cloud cover was \> 50%. The filtered dataset contains `r nrow(S2_max_cloud)`
-(`r round(nrow(S2_max_cloud)/nrow(S2_for_class_analysis)*100, 1)`%) where max
-was \>75% and `r nrow(S2_mean_cloud)`
-(`r round(nrow(S2_mean_cloud)/nrow(S2_for_class_analysis)*100, 1)`%) where the
-mean cloud cover was \> 50%. This is also unhelpful.
-
-### RadSat QA bit
-
-Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull,
-we masked satruated pixels, so this should be zero.
+Sentinel 2 doesn't have an aerosol QA flag, but SR_B1 is aerosol, so we can look
+at distributions to examine this. Let's look at the distribution across all data:
 
 ```{r}
 S2_for_class_analysis %>% 
-  mutate(radsat = if_else(QA_RADSAT == 0,
-                           "n",
-                           "y")) %>% 
-  group_by(radsat) %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
+  ggplot(., aes(x = SR_B1)) +
+  geom_histogram(binwidth = 0.01) +
+  facet_grid(class ~ .) +
+  theme_bw() +
+  scale_x_continuous(breaks = seq(0, max(S2_for_class_analysis$SR_B1), 0.05))
+
+B1_summary <- S2_for_class_analysis %>% 
+  group_by(class) %>% 
+  summarise(fifth_B1 = quantile(SR_B1, 0.05),
+            mean_B1 = mean(SR_B1),
+            ninetyfifth_B1 = quantile(SR_B1, 0.95))
+
+kable(B1_summary)
 ```
 
-Great! No bands are saturated!
-
-### Aerosol QA bit
-
-Sentinel 2 and 9 feature an Aerosol QA band, derived from Band 1. We should look
-through the data here to see if any of the labels are in high aerosol QA pixels,
-which the USGS suggests should not be used.
+Let's see how many of the oultiers have Rrs values higher than the 95th percentile
+in their class:
 
 ```{r}
-S2_for_class_analysis %>% 
-  mutate(aerosol = if_else(str_sub(SR_QA_AEROSOL_binary, 1, 2) == 11,
-                           "y",
-                           "n")) %>% 
-  group_by(aerosol) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
+outliers %>% 
+  left_join(B1_summary) %>% 
+  filter(SR_B1 > ninetyfifth_B1, class != "cloud") %>% 
+  nrow()
 ```
 
-And let's look to see when the instances of high aerosol are:
-
-```{r}
-S2_for_class_analysis %>% 
-  filter(str_sub(SR_QA_AEROSOL_binary, 1, 2) == 11) %>% 
-  group_by(date) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  arrange(-n_tot) %>% 
-  kable()
-```
-
-We already know that the scenes 2022-05-05 and 2022-06-06 have been flagged, let's
-also look at 2022-05-21:
-
-![](images/S2_2022-05-21.png)
-
-Well, some of the scene is pretty clear, but there is some of the green-cloud 
-artifact of high aerosol evident in this scene. 
-
-I'm also interested in the scene quality here:
-
-```{r}
-S2_for_class_analysis %>% 
-  filter(date == "2022-05-21") %>% 
-  pluck("IMAGE_QUALITY_OLI_list") %>% 
-  unique() %>% 
-  unlist()
-```
-
-As with other instances, IMAGE QUALITY is high. Since there is quite a bit of this
-scene that is clear, I'm again going to trust the QA bits. 
+This is about 50% of the outliers, so a pretty decent QA measure.
 
 ### Training dataset implications
 
-For the purposes of training data, we are going to throw out the the high aerosol 
-and cirrus flags
+For the purposes of training data, we are going to throw out any labels that
+have qa flags associated with them
 
 ```{r}
 S2_training_labels <- S2_for_class_analysis %>% 
-  # drop the labels with cirrus contamination and high aerosol
-  filter(!(str_sub(QA_PIXEL_binary, 1, 2) == 11),
-         # drop all the labels with high aerosol, unless the class is cloud
-         (str_sub(SR_QA_AEROSOL_binary, 1, 2) != 11 | class == "cloud"))
+  filter(if_all(c("cirrus", "cirrus_scl", "cloud_shadow", 
+                    "dark_pixel", "hi_prob_cloud", "med_prob_cloud",
+                    "opaque", "snow_ice"),
+                  ~ . == 0) |
+           class == "cloud") %>% 
+  filter(!(date %in% c("2022-06-23", "2023-04-11")))
+  
 ```
+
+Let's now see how many of these have high percentile SR_B1:
+
+```{r}
+S2_training_labels %>% 
+  left_join(B1_summary) %>% 
+  filter(SR_B1 > ninetyfifth_B1, class != "cloud") %>% 
+  nrow()
+```
+
+And make sure none of them are concentrated in a specific scene:
+
+```{r}
+S2_training_labels %>% 
+  left_join(B1_summary) %>% 
+  filter(SR_B1 > ninetyfifth_B1, class != "cloud") %>% 
+  group_by(date, vol_init) %>% 
+  summarise(n_high_aero = n())
+```
+
+This seems totally reasonable. 
 
 ## Testing for inter-class differences
 
@@ -443,13 +408,13 @@ With this workflow, most classes are statistically different - below are the
 cases where the pairwise comparison were not deemed statistically significant:
 
 ```{r, echo = FALSE}
-LS89_band_sym = syms(LS89_ee)
+S2_band_sym = syms(S2_ee_all)
 
 S2_class_analysis <- pmap(.l = list(dataset = list(S2_training_labels),
-                                     band = LS89_band_sym,
+                                     band = S2_band_sym,
                                      class_col = list(sym("class"))),
                            .f = test_class_sig)
-names(S2_class_analysis) <- LS89_ee
+names(S2_class_analysis) <- S2_band_sym
 
 map(S2_class_analysis,
     function(band) {
@@ -458,11 +423,30 @@ map(S2_class_analysis,
     }
   ) %>% 
   list_rbind() %>% 
-  rename(band = .y.)
+  rename(band = .y.) %>% 
+  kable()
 ```
 
-This is arguably worse than LS8. I think part of the issue for 8 and 9 may be 
-a quantity issue.
+Eep, this isn't great, but the pairwise confusion seems concentrated in dark 
+near shore sediment. 
+
+Let's look at the boxplots of the non-cloud classes:
+
+```{r}
+S2_training_labels_no_clouds <- S2_training_labels %>% 
+  filter(class != "cloud")
+pmap(.l = list(data = list(S2_training_labels_no_clouds),
+               data_name = list("SENTINEL_2"),
+               band = S2_ee_all),
+     .f = make_class_comp_plot)
+```
+
+This actually makes me feel a little better. I think there might be enough here
+for ML to differentiate between classes. 
+
+There are `r nrow(S2_class_analysis$SR_B1$outliers)` in SR_B1, `r nrow(S2_class_analysis$SR_B2$outliers)` in SR_B2, `r nrow(S2_class_analysis$SR_B3$outliers)` in SR_B3, `r nrow(S2_class_analysis$SR_B4$outliers)` in SR_B4, `r nrow(S2_class_analysis$SR_B5$outliers)` in SR_B5, `r nrow(S2_class_analysis$SR_B6$outliers)` outliers in SR_B6, `r nrow(S2_class_analysis$SR_B7$outliers)` in SR_B7, `r nrow(S2_class_analysis$SR_B8$outliers)` in SR_B8, `r nrow(S2_class_analysis$SR_B8A$outliers)` in SR_B8A, `r nrow(S2_class_analysis$SR_B11$outliers)` in SR_B11, and `r nrow(S2_class_analysis$SR_B12$outliers)` in SR_B12.
+
+
 
 ```{r, echo=FALSE, fig.dim=c(10,10), fig.cap="DNSS: dark near shore sediment, LNSS: light near shore sediment, OSS: offshore sediment"}
 S2_training_labels %>% 
@@ -470,13 +454,13 @@ S2_training_labels %>%
                                  class == "lightNearShoreSediment" ~ "LNSS",
                                  class == "offShoreSediment" ~ "OSS",
                                  TRUE ~ class)) %>% 
-ggpairs(., columns = LS89_ee, aes(color = class_short)) + 
+ggpairs(., columns = S2_ee_all, aes(color = class_short)) + 
   scale_color_colorblind() +
   scale_fill_colorblind() +
   theme_few()
 ```
 
-There are definitely some varying patterns here, let's zoom in on the sediment
+Let's zoom in on the sediment
 classes.
 
 ```{r, echo=FALSE, fig.dim=c(8,8), fig.cap="DNSS: dark near shore sediment, LNSS: light near shore sediment, OSS: offshore sediment"}
@@ -486,79 +470,26 @@ S2_training_labels %>%
                                  class == "offShoreSediment" ~ "OSS",
                                  TRUE ~ class)) %>% 
   filter(grepl("Sediment", class) | class == "openWater") %>% 
-ggpairs(., columns = LS89_ee, aes(color = class_short)) + 
+ggpairs(., columns = S2_ee_all, aes(color = class_short)) + 
   scale_color_colorblind() +
   scale_fill_colorblind() +
   theme_few()
 ```
 
-Arguably not as scatter shot bad as LS8, but still might be tough to distinguish 
-between classes.
-
-### Aggregating sediment classes and performing statistical tests
-
-As a back up, we should consider using aggregated sediment classes, where any 
-label of sediment is treated as a general class of "sediment". Let's do the same 
-process here to test for class significance.
-
-```{r, echo = FALSE}
-S2_training_labels <- S2_training_labels %>% 
-  mutate(agg_class = if_else(grepl("Sediment", class),
-                             "sediment",
-                             class))
-
-S2_class_analysis_aggregated <- pmap(.l = list(dataset = list(S2_training_labels),
-                                     band = LS89_band_sym,
-                                     class_col = list(sym("agg_class"))),
-                           .f = test_class_sig)
-names(S2_class_analysis_aggregated) <- LS89_ee
-
-map(S2_class_analysis_aggregated,
-    function(band) {
-      band$pairwise_difference %>% 
-        filter(p.adj.signif == "ns")
-    }
-  ) %>% 
-  list_rbind() %>% 
-  rename(band = .y.)
-```
-
-And let's look at the scatter plots here:
-
-```{r, echo=FALSE, fig.dim=c(10,10)}
-S2_training_labels %>% 
-ggpairs(., columns = LS89_ee, aes(color = agg_class)) + 
-  scale_color_colorblind() +
-  scale_fill_colorblind() +
-  theme_few()
-```
-
-And if we drop the cloud:
-
-```{r}
-S2_training_labels %>% 
-  filter(agg_class != "cloud") %>% 
-ggpairs(., columns = LS89_ee, aes(color = agg_class)) + 
-  scale_color_colorblind() +
-  scale_fill_colorblind() +
-  theme_few()
-```
-
-These seem pretty recognizable in visible band space. 
 
 ## Export the training labels
 
 Things to note for Sentinel 2:
 
--   classes are less differentiable statistically within bands than LS5 and 7 -
-    need to be thoughtful about this when applying the models. This may require
-    more post-hoc testing to add certainty to output.
+-   any QA flagged pixel should be dissmissed before applying the algorithm
+-   SR_B1 values greater than 0.04 for open water and dark near shore sediment, 
+    0.05 for offshore sediment, and 0.08 for light near shore sediment may have more
+    uncertainty associated with their labels. 
 -   bright cloud cover and snow may impact Rrs within the waterbody leading to
     outliers. will need to be cautious applying the algo when snow is on the
-    ground!
--   must mask high aerosol pixels, as they will get labeled as something else
-    entirely.
--   We may need to aggregate the sediment into a single class for reliable results
+    ground - might consider filtering out tiles with high (>10%) snow/ice cover
+-   higher concentrations of cirrus clouds (via tile metadata) and cloud cover
+    may merit additional uncertainty
 
 ```{r}
 write_rds(S2_training_labels, paste0("data/labels/S2_labels_for_tvt_", outlier_version, ".RDS"))

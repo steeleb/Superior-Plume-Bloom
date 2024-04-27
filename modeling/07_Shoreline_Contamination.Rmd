@@ -35,8 +35,7 @@ lapply(packages, package_loader)
 ## Load the labels file into the environment
 
 ```{r}
-labels_file <- list.files('data/labels/', full.names = T)
-labels <- read_csv(labels_file)
+labels <- read_csv("data/labels/collated_label_data_v2023-07-20.csv")
 ```
 
 ## Load the aoi into the environment

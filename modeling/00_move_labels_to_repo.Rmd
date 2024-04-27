@@ -71,6 +71,7 @@ file of the additional data doesn't exist. In this case, we'll save each mission
 as its own file, because the colnames are different and this will save us some
 munging later.
 
+
 ```{r}
 # get a list of the added band data
 add_data_list <- drive_ls(path = "eePlumB_additional_band_data", pattern = "_v2024-04-25.csv")

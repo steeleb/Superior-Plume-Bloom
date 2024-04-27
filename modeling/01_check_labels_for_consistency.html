@@ -382,8 +382,8 @@ dismiss these data from the workflow and note that this is an imperfect
 process.</p>
 <div id="load-data" class="section level2">
 <h2>Load data</h2>
-<pre class="r"><code>add_data_date = &quot;2024-04-24&quot;
-harmonize_version = &quot;v2024-04-24&quot;</code></pre>
+<pre class="r"><code>add_data_date = &quot;2024-04-25&quot;
+harmonize_version = &quot;2024-04-25&quot;</code></pre>
 <div id="label-data" class="section level3">
 <h3>Label data</h3>
 <p>Walk through the file paths and read in the label data:</p>
@@ -500,6 +500,7 @@ S2_metadata &lt;- metadata$SEN2 %&gt;%
 <li>drops any point labels if they contain data from bands that are not
 present in a given satellite mission sensor</li>
 <li>re-orgs the data to a more sensical format</li>
+<li>pulls the lat/lon from the .geo column</li>
 <li>removes any false precision based on the upstream radiometric bit
 depth of the sensor</li>
 <li>adds metadata to the label data</li>
@@ -528,10 +529,13 @@ depth of the sensor</li>
            B5 = B6, 
            B7, 
            # re-pull columns
-           starts_with(&quot;SR&quot;), starts_with(&quot;ST&quot;), contains(&quot;QA&quot;)) %&gt;% 
+           starts_with(&quot;SR&quot;), starts_with(&quot;ST&quot;), contains(&quot;_conf&quot;), contains(&quot;cloud&quot;)) %&gt;% 
   # anything beyond 3 digits is false precision, thanks 8 bit depth.
   mutate(across(c(B1:B7, SR_B1:SR_B7),
                 ~ round(., digits = 3))) %&gt;% 
+  rowwise() %&gt;% 
+  mutate(lon = fromJSON(.geo)$coordinates[1],
+         lat = fromJSON(.geo)$coordinates[2]) %&gt;% 
   left_join(., LS57_metadata)
 
 # and pull aside those points where there was B11 data... for now, just dumping 
@@ -539,7 +543,11 @@ depth of the sensor</li>
 mislabeled_LS57 &lt;- labels$LS5_LS7 %&gt;% 
   # provide a unique id for the labels here
   rowid_to_column(&quot;user_label_id&quot;) %&gt;% 
-  filter(!is.na(B11))</code></pre>
+  filter(!is.na(B11))
+
+# drop the non-LS5/7 columns
+LS57 &lt;- LS57 %&gt;% 
+  select(-c(&quot;.geo&quot;, &quot;system:time_start&quot;, &quot;system:index&quot;))</code></pre>
 <p>There are 55 mis-attributed rows in the Landsat 5/7 dataset. That’s
 1.2 percent of the dataset.</p>
 <p>Let’s do a quick scan of the users here:</p>
@@ -603,15 +611,24 @@ LS57 labels mislabels volunteer</p>
          B5, B6, B7, B8, B11, B12,
          # re-pull columns
          starts_with(&quot;SR&quot;)) %&gt;% 
+  # need to do a quick unit conversion for B11 and B12, which weren&#39;t converted
+  # in the user pull to Rrs units.
+  mutate(across(c(B11, B12),
+                ~ .*0.0001)) %&gt;% 
   # drop mission column for proper joining (there is no way to distinguish Sentinel
   # a and b missions, and the dates are unique)
   select(-mission) %&gt;% 
+  remove_empty(which = &quot;cols&quot;) %&gt;% 
   # round to 4 digits here - 12 bit depth
   mutate(across(c(B2:B12, SR_B1:SR_B9),
                 ~ round(., digits = 4))) %&gt;% 
+  rowwise() %&gt;% 
+  mutate(lon = fromJSON(.geo)$coordinates[1],
+         lat = fromJSON(.geo)$coordinates[2]) %&gt;% 
   left_join(., S2_metadata) %&gt;% 
   # pull that mission column back to the front
-  relocate(date, mission)</code></pre>
+  relocate(date, mission) %&gt;% 
+  select(-c(&quot;system:index&quot;, &quot;system:time_start&quot;, &quot;.geo&quot;))</code></pre>
 <p>There are no mis-attributed rows in the Sentinel-2 dataset:</p>
 <pre class="r"><code># MSK_CLDPRB is unique to Sentinel 2.
 labels$SEN2 %&gt;% 

@@ -34,8 +34,8 @@ outlier dataset to be able to pre-emptively toss out scenes when we go to apply
 the classification algorithm.
 
 ```{r}
-harmonize_version = "v2024-04-17"
-outlier_version = "v2024-04-17"
+harmonize_version = "2024-04-25"
+outlier_version = "2024-04-25"
 
 LS8 <- read_rds(paste0("data/labels/harmonized_LS89_labels_", harmonize_version, ".RDS")) %>% 
   filter(mission == "LANDSAT_8")
@@ -61,7 +61,8 @@ filter inconsistent labels
 
 ```{r}
 LS8_inconsistent <- LS8 %>% 
-  filter((is.na(SR_B7) | SR_B7 != B7))
+  filter(is.na(SR_B7) | B2 != SR_B2 | B3 != SR_B3 | 
+           B4 != SR_B4 | B5 != SR_B5 | B6 != SR_B6 | B7 != SR_B7)
 
 LS8_inconsistent %>% 
   group_by(class) %>% 
@@ -69,28 +70,24 @@ LS8_inconsistent %>%
   kable()
 ```
 
-Most of these are cloud labels, where the pixel is saturated, and then masked in
-the re-pull value (resulting in an NA). Let's drop those from this subset and
-then look more.
+None of these are inconsistent because of saturated pixels:
 
 ```{r}
-LS8_inconsistent <- LS8_inconsistent %>% 
-  filter(!(class == "cloud" & is.na(SR_B7)))
-
+LS8 %>% 
+  filter(is.na(SR_B7)) %>% 
+  nrow()
 ```
 
 This leaves `r round(nrow(LS8_inconsistent)/nrow(LS8)*100, 1)`% of the Landsat 7
-labels as inconsistent. Let's do a quick sanity check to make sure that we've
+labels as inconsistent - we'll dig more into this in a bit. Let's do a quick 
+sanity check to make sure that we've
 dropped values that are inconsistent between pulls:
 
 ```{r}
 LS8_filtered <- LS8 %>% 
-  filter(# filter data where SR_B7 has data and where the values match between the two
-         # pulls.
-         (!is.na(SR_B7) & SR_B7 == B7) | 
-           # or where the user-specified class is cloud and the pixel was saturated
-           # providing no surface refelctance data
-           (class == "cloud" & is.na(SR_B7)),
+  filter(# filter data where the repull data and user data match
+         (B2 == SR_B2 & B3 == SR_B3 & 
+           B4 == SR_B4 & B5 == SR_B5 & B6 == SR_B6 & B7 == SR_B7),
          # or where any re-pulled band value is greater than 1, which isn't a valid value
          if_all(LS89_ee,
                 ~ . <= 1))
@@ -106,8 +103,6 @@ pmap(.l = list(user_band = LS89_user,
      .f = make_band_comp_plot)
 ```
 
-Looks good!
-
 And now let's look at the data by class:
 
 ```{r, echo=FALSE}
@@ -121,11 +116,14 @@ We aren't actually modeling "other" (not sufficient observations to classify) or
 "shorelineContamination" (we'll use this later to block areas where there is
 likely shoreline contamination in the AOI). Additionally, the "algalBloom"
 labels don't have sufficient n (nor do we think these are necessarily visible),
-so let's drop those categories and look at the data again.
+so let's drop those categories and look at the data again. Since we've completed
+the process of comparison between the user pull and the re-pull, let's remove the
+user-pulled band data, too.
 
 ```{r}
 LS8_for_class_analysis <- LS8_filtered %>% 
-  filter(!(class %in% c("other", "shorelineContamination", "algalBloom")))
+  filter(!(class %in% c("other", "shorelineContamination", "algalBloom"))) %>% 
+  select(-c(B2:B7))
 ```
 
 ```{r, echo=FALSE}
@@ -153,9 +151,35 @@ LS8_inconsistent %>%
   kable()
 ```
 
-I'm not concerned about any systemic errors here that might require modified
-data handling for a specific scene or contributor, labels are spread amongst
-volunteers and scenes.
+Let's look at these by image date:
+
+```{r}
+L8_tot <- LS8 %>% 
+  group_by(vol_init, date) %>% 
+  summarise(n_tot_labels = n())
+LS8_inconsistent %>% 
+  group_by(vol_init, date) %>% 
+  summarise(n_incon_labs = n()) %>% 
+  arrange(-n_incon_labs) %>%
+  left_join(L8_tot) %>% 
+  mutate(perc_incon_labels = round((n_incon_labs/n_tot_labels)*100, 1)) %>% 
+  arrange(-perc_incon_labels) %>% 
+  kable()
+```
+
+Let's look to see if the scenes for 2022-08-01 have been reprocessed since the
+user export date. 
+
+```{r}
+read_csv("data/labels/collated_scene_metadata_LS8_LS9_v2024-04-25.csv") %>% 
+  filter(DATE_ACQUIRED == "2022-08-01") %>% 
+  pluck("LANDSAT_PRODUCT_ID")
+```
+
+Nope (the second 8-digit number is the date it was processed to L2). It's possible that there was a scene-level issue that we'll find later, or
+that the user didn't follow directions, either way, this scene will be dropped at
+the end, but we'll keep it for the time being and see if it's problematic anywhere
+else.
 
 ## Outlier handling
 
@@ -194,7 +218,9 @@ unique(outliers$class)
 
 Okay, `r nrow(outliers)` outliers (\>1.5\*IQR) out of
 `r nrow(LS8_for_class_analysis)` - and they are all from non-cloud groups, and
-non of them are light near shore sediment.
+none of them are light near shore sediment.
+
+### Scene Level Metadata
 
 How many of these outliers are in specific scenes?
 
@@ -213,7 +239,8 @@ LS8_out_date %>%
   kable()
 ```
 
-There are three scenes here that have very high outliers - perhaps there is
+There are two scenes here that have very high outliers, one is that August 2022
+scene - perhaps there is
 something about the AC in these particular scenes? or the general scene quality?
 
 ```{r}
@@ -226,13 +253,17 @@ LS8_out_date %>%
   kable()
 ```
 
-Image quality is high across the board, but the 2022-11-21 image has moderate
-cloud cover, and is almost entirely outliers. Let's look at that scene:
+Image quality is high across the board, and the cloud cover is generally moderate.
+
+Let's look at these two images:
 
 ![](images/LS8_2022-11-21.png)
 
 Another case of high cloud cover and adjacent snow! We should definitely toss
-this scene. For consistency, let's look at instances where outliers are in at
+this scene (but we'll wait to do that later, after we've looked to see if aerosol
+is high in the QA band step, since there is nothing from the metadata that would
+indicate this scene would be problematic). For consistency, let's look at 
+instances where outliers are in at
 least three bands for a given label:
 
 ```{r, echo = FALSE}
@@ -260,7 +291,7 @@ vert_out %>%
   kable()
 ```
 
-Interesting - let's look at this scene too.
+We are already going to toss this scene, but let's look at it:
 
 ![](images/LS8_2022-08-01.png)
 
@@ -275,58 +306,8 @@ LS8_for_class_analysis %>%
   unlist()
 ```
 
-That's not helpful - the image quality is the highest it can be.
-
-### QA Pixels
-
-Do any of the labels have QA pixel indications of cloud or cloud shadow? The
-first pass here is for all data that don't have a label of "cloud" (not just
-outliers). Let's see if the low certainty classification in the QA band is
-useful here (there is no medium certainty for LS8/9)
-
-```{r}
-LS8_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) %in% c(01, 11)  ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) %in% c(01, 11)  ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6) %in% c(01, 11)  ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8) %in% c(01, 11)  ~ "cloud",
-                   TRUE ~ "clear")) %>% 
-  group_by(QA) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
-```
-
-Low confidence is much better than medium confidence in LS8 than 5/7 - let's
-check to see that the classes are the same for high confidence:
-
-```{r}
-LS8_for_class_analysis %>% 
-  mutate(QA = case_when(str_sub(QA_PIXEL_binary, 1, 2) == 11 ~ "cirrus",
-                   str_sub(QA_PIXEL_binary, 3, 4) == 11 ~ "snow/ice",
-                   str_sub(QA_PIXEL_binary, 5, 6)  == 11 ~ "cloud shadow",
-                   str_sub(QA_PIXEL_binary, 7, 8)  == 11 ~ "cloud",
-                   TRUE ~ "clear")) %>% 
-  group_by(QA) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  kable()
-```
-
-They are the same! Let's look at the cloud shadow group to see if there is
-anything egregious:
-
-```{r}
-LS8_for_class_analysis %>% 
-  filter(str_sub(QA_PIXEL_binary, 5, 6) == 11) %>% 
-  group_by(date, vol_init) %>% 
-  summarise(n_cloud_shadow = n()) %>% 
-  arrange(-n_cloud_shadow) %>% 
-  kable()
-```
-
-We already know that the highest ranked cloud shadow scene here is also one we
-are going to drop, so I don't think there is anything else to pursue here.
+That's not helpful - the image quality is the highest it can be. The QA pixels
+might be more helpful here.
 
 ### Clouds
 
@@ -384,23 +365,44 @@ was \>75% and `r nrow(LS8_mean_cloud)`
 (`r round(nrow(LS8_mean_cloud)/nrow(LS8_for_class_analysis)*100, 1)`%) where the
 mean cloud cover was \> 50%. Welp, this is unhelpful!
 
-### RadSat QA bit
+### QA Pixels
 
-Pixels can also be saturated in one or more bands, we need to make sure that the
-QA_RADSAT for all labels (including clouds) are set to zero. During the re-pull, 
-we masked satruated pixels, so this should be zero.
+Do any of the labels have QA pixel indications of contamination? Let's see if 
+the medium certainty classification in the QA band is useful here:
 
 ```{r}
 LS8_for_class_analysis %>% 
-  mutate(radsat = if_else(QA_RADSAT == 0,
-                           "n",
-                           "y")) %>% 
-  group_by(radsat) %>% 
+  mutate(QA = case_when(cirrus_conf >= 3 ~ "cirrus",
+                        cloud_conf >= 3 ~ "cloud",
+                        cloudshad_conf >= 3 ~ "cloud shadow",
+                        snowice_conf >= 3 ~ "snow/ice",
+                        TRUE ~ "clear")) %>% 
+  group_by(QA) %>% 
+  filter(class != "cloud") %>% 
   summarize(n_tot = n()) %>% 
   kable()
 ```
 
-Great! No bands are saturated!
+Low confidence, like with LS5/7 is too conservative (would flag all labels), 
+so we'll stick with high
+confidence since there isn't medium confidence in the QA bits for LS8/9.
+
+Let's look at the cloud shadow group to see if there is
+anything egregious:
+
+```{r}
+LS8_for_class_analysis %>% 
+  filter(cloudshad_conf >= 3, class != "cloud") %>% 
+  group_by(date, vol_init) %>% 
+  summarise(n_cloud_shadow = n()) %>% 
+  arrange(-n_cloud_shadow) %>% 
+  left_join(L8_tot) %>% 
+  mutate(perc_cloud_shad = round((n_cloud_shadow/n_tot_labels)*100, 1)) %>% 
+  kable()
+```
+
+We already know that the highest ranked cloud shadow scene here (2022-11-21) is also one we
+are going to drop, so I don't think there is anything else to pursue here.
 
 ### Aerosol QA bit
 
@@ -410,37 +412,23 @@ which the USGS suggests should not be used.
 
 ```{r}
 LS8_for_class_analysis %>% 
-  mutate(aerosol = if_else(str_sub(SR_QA_AEROSOL_binary, 1, 2) == 11,
-                           "y",
-                           "n")) %>% 
-  group_by(aerosol) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
+  filter(aero_level == 3, class != "cloud") %>% 
+  group_by(date) %>%
+  summarise(n_high_aero_labels = n()) %>% 
+  left_join(L8_tot) %>% 
+  mutate(perc_high_aero = round(n_high_aero_labels/n_tot_labels*100, 1)) %>% 
+  arrange(-perc_high_aero) %>% 
   kable()
-```
 
-And let's look to see when the instances of high aerosol are:
-
-```{r}
-LS8_for_class_analysis %>% 
-  mutate(aerosol = if_else(str_sub(SR_QA_AEROSOL_binary, 1, 2) == 11,
-                           "y",
-                           "n")) %>%
-  filter(aerosol == "y") %>% 
-  group_by(date) %>% 
-  filter(class != "cloud") %>% 
-  summarize(n_tot = n()) %>% 
-  arrange(-n_tot) %>% 
-  kable()
 ```
 
 Let's look at the 2020-08-11 and 2017-09-04 images. First 2020-08-11:
 
-![](images/LS8_2020-08-11-01.png)
+![](images/LS8_2020-08-11.png)
 
 This image is clear as day, but if you zoom in near the Apostle Islands, you can
 see the haze. As suggested by the USGS, I think it is fine to just toss labels
-where aerosol is high.
+where aerosol is high. 
 
 And 2017-09-04:
 
@@ -463,17 +451,29 @@ all labels that are flagged with high aerosol. This scene has 23 of
 `r LS8_for_class_analysis %>% filter(date == "2017-09-04") %>% nrow()` labels that
 are flagged as high aerosol, but I argue anything in this scene should be tossed. 
 
+If I map out the aerosol flag in GEE, it looks like this, where white is 'high 
+aerosol':
+
+![](images/LS8_2017-09-04_aero.png)
+
+Generally speaking, this is an invalid scene.
+
 ### Training dataset implications
 
-For the purposes of training data, we are going to throw out the outlier scene
-on 2022-11-21, the high aerosol scene 2017-09-04, 
+For the purposes of training data, we are going to throw out scene that had a 
+majority of inconsistent band values between the user pull and re-pull (202-08-01), 
+and the high aerosol scene 2017-09-04, as well as any label where aerosol is high,
+or any of the QA flags have high confidence for clouds, cloud shadows, snow/ice.
 
 ```{r}
 LS8_training_labels <- LS8_for_class_analysis %>% 
-  # drop the scene with outliers and high aerosol
-  filter(!(date %in% c("2022-11-21", "2017-09-04")),
-         # drop all the labels with high aerosol, unless the class is cloud
-         (str_sub(SR_QA_AEROSOL_binary, 1, 2) != 11 | class == "cloud"))
+  filter(!(date %in% c("2022-08-01", "2017-09-04"))) %>% 
+  filter(class == "cloud" |
+           (aero_level < 3 &
+              cirrus_conf < 3 &
+              cloud_conf < 3 &
+              cloudshad_conf < 3 & 
+              snowice_conf < 3))
 ```
 
 ## Testing for inter-class differences
@@ -537,6 +537,19 @@ Alright, all over the map here - dark near shore is still a problem, but also
 some issues with offshore sediment, open water, and light near shore sediment.
 This could be problematic. We'll have to see how these data look and hope that
 ML can pick up on the subtle differences.
+
+Let's look at the boxplots of the non-cloud classes:
+
+```{r}
+LS8_training_labels_no_clouds <- LS8_training_labels %>% 
+  filter(class != "cloud")
+pmap(.l = list(data = list(LS8_training_labels_no_clouds),
+               data_name = list("LANDSAT_5"),
+               band = LS89_ee),
+     .f = make_class_comp_plot)
+```
+
+There are `r nrow(LS8_class_analysis$SR_B2$outliers)` in SR_B2, `r nrow(LS8_class_analysis$SR_B3$outliers)` in SR_B3, `r nrow(LS8_class_analysis$SR_B4$outliers)` in SR_B4, `r nrow(LS8_class_analysis$SR_B5$outliers)` in SR_B5, `r nrow(LS8_class_analysis$SR_B6$outliers)` outliers in SR_B6, and `r nrow(LS8_class_analysis$SR_B7$outliers)` in SR_B7.
 
 ```{r, echo=FALSE, fig.dim=c(10,10), fig.cap="DNSS: dark near shore sediment, LNSS: light near shore sediment, OSS: offshore sediment"}
 LS8_training_labels %>% 
@@ -618,21 +631,19 @@ ggpairs(., columns = LS89_ee, aes(color = agg_class)) +
   theme_few()
 ```
 
-These seem pretty recognizable in visible band space, but maybe not otherwise. 
+Okay, this may be a reasonable backup, even if it's kind of boring...
 
 ## Export the training labels
 
 Things to note for Landsat 8:
 
--   classes are less differentiable statistically within bands than LS5 and 7 -
-    need to be thoughtful about this when applying the models. This may require
-    more post-hoc testing to add certainty to output.
 -   bright cloud cover and snow may impact Rrs within the waterbody leading to
     outliers. will need to be cautious applying the algo when snow is on the
     ground!
 -   must mask high aerosol pixels, as they will get labeled as something else
     entirely because high aerosol results in green-hued areas of scenes.
 -   We may need to aggregate the sediment into a single class for reliable results
+-   pixels with QA flags should be dismissed from model application
 
 ```{r}
 write_rds(LS8_training_labels, paste0("data/labels/LS8_labels_for_tvt_", outlier_version, ".RDS"))

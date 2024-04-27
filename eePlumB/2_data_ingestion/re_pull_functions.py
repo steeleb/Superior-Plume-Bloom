@@ -205,7 +205,7 @@ def extract_qa_bits(qa_band, start_bit, end_bit, band_name):
 # function to flag high aerosol pixels
 def flag_high_aerosol(image):
   qa_aero = image.select("SR_QA_AEROSOL")
-  aero = extract_qa_bits(qa_aero, 6, 7, 'aero_level')
+  aero = extract_qa_bits(qa_aero, 6, 8, 'aero_level')
   return image.addBands(aero)
  
 # Bit 1: Dilated Cloud
