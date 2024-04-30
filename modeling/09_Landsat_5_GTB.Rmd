@@ -204,20 +204,16 @@ l5 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
   .filter(ee.Filter.lt('CLOUD_COVER', 80))
   .filter(ee.Filter.eq('WRS_PATH', 26))
   .filter(ee.Filter.inList('WRS_ROW', ROWS))
-  .filter(ee.Filter.gte('IMAGE_QUALITY', 9))
+  .filter(ee.Filter.gte('IMAGE_QUALITY', 7))
+  .filter(ee.Filter.calendarRange(4, 11, 'month'))
+  # mask high atmospheric opacity (conservative decision)
+  .map(gf.mask_high_atmos_opac)
+  # mask pixels with any qa flags
+  .map(gf.mask_qa_flags)
+  # mask saturated pixels
+  .map(gf.apply_radsat_mask)
+  # apply scaling factors
   .map(gf.applyScaleFactors))
-```
-
-Add QA_RADSAT mask to mask where any band was saturated
-
-```{python}
-l5 = l5.map(gf.apply_radsat_mask)
-```
-
-Mask QA bits
-
-```{python}
-l5 = l5.map(gf.mask_qa_flags)
 ```
 
 ### Load modeling AOIs and clip stack

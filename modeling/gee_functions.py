@@ -278,7 +278,7 @@ def mask_qa_flags(image):
 # 1: Cirrus clouds present
 
 def mask_high_atmos_opac(image):
-  atmos = image.select(SR_ATMOS_OPACITY).multiply(0.001)
+  atmos = image.select("SR_ATMOS_OPACITY").multiply(0.001)
   mask = atmos.lt(0.3)
   return image.updateMask(mask)
 
