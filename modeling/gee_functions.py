@@ -1,5 +1,11 @@
 import ee
 
+aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
+aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')
+
+fromlist = [0,1,2,3,4]
+tolist = [1,2,3,4,5]
+
 # function to add date to properties
 def set_date(feature):
     """
@@ -17,7 +23,7 @@ def set_date(feature):
 # function to apply scaling factors to LS5/7
 def applyScaleFactors(image):
     """
-    Applies scaling factors to the optical and thermal bands of an image for Landsat 5/7.
+    Applies scaling factors to the optical bands of an image for any Landsat 4-9 image.
 
     Args:
         image (ee.Image): The earth engine image to apply the scaling factors to.
@@ -26,33 +32,9 @@ def applyScaleFactors(image):
         ee.Image: The earth engine image with the re-scaled bands.
     """
     opticalBands = image.select("SR_B.").multiply(0.0000275).add(-0.2)
-    thermalBands = image.select("ST_B.").multiply(0.00341802).add(149.0)
-    opac = image.select('SR_ATMOS_OPACITY').multiply(0.001)
-    cloudDist = image.select("ST_CDIST").multiply(0.01)
     return (image
-        .addBands(opticalBands, None, True)
-        .addBands(thermalBands, None, True)
-        .addBands(opac, None, True)
-        .addBands(cloudDist, None, True))
+        .addBands(opticalBands, None, True))
 
-# function to apply scaling factors to LS8/9
-def applyScaleFactors_89(image):
-    """
-    Applies scaling factors to the optical and thermal bands of an image for Landsat 8/9.
-
-    Args:
-        image (ee.Image): The earth engine image to apply the scaling factors to.
-
-    Returns:
-        ee.Image: The earth engine image with the scaled bands.
-    """
-    opticalBands = image.select("SR_B.").multiply(0.0000275).add(-0.2)
-    thermalBands = image.select("ST_B..").multiply(0.00341802).add(149.0)
-    cloudDist = image.select("ST_CDIST").multiply(0.01)
-    return (image
-        .addBands(opticalBands, None, True)
-        .addBands(thermalBands, None, True)
-        .addBands(cloudDist, None, True))
 
 def rename_S2_band(bn):
   """
@@ -202,11 +184,12 @@ def extract_qa_bits(qa_band, start_bit, end_bit, band_name):
     # (0 or 1 for single bit,  0-3 or 0-N for multiple bits)
     .rightShift(start_bit))
 
-# function to flag high aerosol pixels
-def flag_high_aerosol(image):
+# function to mask high aerosol pixels
+def mask_high_aerosol(image):
   qa_aero = image.select("SR_QA_AEROSOL")
   aero = extract_qa_bits(qa_aero, 6, 8, 'aero_level')
-  return image.addBands(aero)
+  aero_mask = aero.lt(3)
+  return image.updateMask(aero_mask)
  
 # Bit 1: Dilated Cloud
 # Bits 8-9: Cloud Confidence
@@ -259,11 +242,12 @@ def flag_qa_conf(image):
     
 def mask_qa_flags(image):
   qa = image.select('QA_PIXEL')
-  # where cirrus confidence is high
+  # where qa confidence is high
   cirrus_conf = extract_qa_bits(qa, 14, 16, 'cirrus_conf').eq(3)
   snowice_conf = extract_qa_bits(qa, 12, 14, 'snowice_conf').eq(3)
   cloudshad_conf = extract_qa_bits(qa, 10, 12, 'cloudshad_conf').eq(3)
   cloud_conf = extract_qa_bits(qa, 8, 10, 'cloud_conf').eq(3)
+  # create a mask where the qa is not high
   mask = (cirrus_conf.eq(0)
     .And(snowice_conf.eq(0))
     .And(cloudshad_conf.eq(0))
@@ -311,3 +295,76 @@ def remove_geo(image):
       ee.Image with the geometry removed
   """
   return image.setGeometry(None)
+
+##Function for limiting the max number of tasks sent to
+#earth engine at one time to avoid time out errors
+def maximum_no_of_tasks(MaxNActive, waitingPeriod):
+  ##maintain a maximum number of active tasks
+  ## initialize submitting jobs
+  ts = list(ee.batch.Task.list())
+  NActive = 0
+  for task in ts:
+     if ('RUNNING' in str(task) or 'READY' in str(task)):
+         NActive += 1
+  ## wait if the number of current active tasks reach the maximum number
+  ## defined in MaxNActive
+  while (NActive >= MaxNActive):
+    time.sleep(waitingPeriod) # if reach or over maximum no. of active tasks, wait for 2min and check again
+    ts = list(ee.batch.Task.list())
+    NActive = 0
+    for task in ts:
+      if ('RUNNING' in str(task) or 'READY' in str(task)):
+        NActive += 1
+  return()
+
+
+def addImageDate(image):
+  mission = image.get('SPACECRAFT_ID')
+  date = image.date().format('YYYY-MM-dd')
+  missDate = ee.String(mission).cat('_').cat(ee.String(date))
+  return image.set('missDate', missDate)
+
+
+# save each value as its own band and mask
+def extract_classes(image):
+  cl = image.select('classification')
+  cloud = cl.eq(0).rename('cloud').selfMask()
+  openWater = cl.eq(1).rename('openWater').selfMask()
+  lightNSSed = cl.eq(2).rename('lightNSSed').selfMask()
+  OSSed = cl.eq(3).rename('OSSed').selfMask()
+  dNSSed = cl.eq(4).rename('dNSSed').selfMask()
+  classified = cl.gte(0).rename('classified').selfMask()
+  img_addBand = (image.addBands(cloud)
+    .addBands(openWater)
+    .addBands(lightNSSed)
+    .addBands(OSSed)
+    .addBands(dNSSed)
+    .addBands(classified))
+  return img_addBand
+
+
+
+
+
+
+def classifications_to_one_band(image):
+  cl = image.select('classification').clip(aoi_ee.geometry())
+  img_classified = (cl
+    .remap(fromlist, tolist, defaultValue = -99)
+    .rename('reclass'))
+  return image.addBands(img_classified)
+
+
+
+#Calculate total area of AOI
+def calc_area(feat):
+  feat_area = feat.geometry().area()
+  feat_area_ha = ee.Number(feat_area).divide(1e5)
+  return feat.set('area_ha', feat_area_ha)
+
+
+# clip images to aoi
+def clip(image):
+  return image.clip(aoi_ee.geometry())
+
+

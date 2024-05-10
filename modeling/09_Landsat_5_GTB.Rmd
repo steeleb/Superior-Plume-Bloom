@@ -50,8 +50,8 @@ import ee
 import os
 import time
 import pandas as pd
-#import geopandas as gpd
 
+# import the python functions used throughout this and other scripts
 import imp
 imp.load_source("gee_funx", "modeling/gee_functions.py")
 import gee_funx as gf
@@ -195,8 +195,6 @@ performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/outpu
 ### Load the image collection
 
 ```{python}
-bn = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
-
 # filter stack for desired PRs
 ROWS = ee.List([27, 28])
 
@@ -224,44 +222,12 @@ Engine Feature Collection.
 
 ```{python}
 aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
-
-#Calculate total area of AOI
-def calc_area(feat):
-  feat_area = feat.geometry().area()
-  feat_area_ha = ee.Number(feat_area).divide(1e5)
-  return feat.set('area_ha', feat_area_ha)
-
-aoi_area = aoi_ee.map(calc_area).aggregate_sum('area_ha')
-aoi_area_ha = aoi_area.getInfo()
-print('total AOI area: ', aoi_area_ha)
 ```
 
 And then clip each image by that aoi
 
 ```{python}
-# clip images to aoi
-def clip(image):
-  return image.clip(aoi_ee.geometry())
-
-l5_aoi = l5.map(clip)
-```
-
-Load other AOIs to summarize over
-
-```{python}
-aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')
-
-aoi_no_sc_area = aoi_no_sc_ee.map(calc_area).aggregate_sum('area_ha')
-aoi_no_sc_area_ha = aoi_no_sc_area.getInfo()
-print('total AOI area without shoreline contamination: ', aoi_no_sc_area_ha)
-
-# aoi_sc_gpd = gpd.read_file('data/aoi/Superior_shoreline_contamination.shp')
-# aoi_sc_ee = gm.geopandas_to_ee(aoi_sc_gpd)
-aoi_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_shoreline_contamination')
-
-aoi_sc_area = aoi_sc_ee.map(calc_area).aggregate_sum('area_ha')
-aoi_sc_area_ha = aoi_sc_area.getInfo()
-print('total AOI area identified as shoreline contamination: ', aoi_sc_area_ha)
+l5_aoi = l5.map(gf.clip)
 ```
 
 #### Helper functions
@@ -270,8 +236,22 @@ print('total AOI area identified as shoreline contamination: ', aoi_sc_area_ha)
 # get CRS info
 img_crs = l5.first().projection()
 img_crsTrans = img_crs.getInfo().get('transform')
+```
 
-#function to apply the GTB model
+### consolidate stack by image date
+
+```{python}
+l5_aoi = l5_aoi.map(gf.addImageDate)
+
+# summarize by missionDate field
+uniqueMissDate_l5 = l5_aoi.aggregate_array('missDate').distinct()
+
+```
+
+### Create mosaics
+
+```{python}
+# need a couple of functions that refer to objects in this script
 def applyGTB_ls5(image):
   # Select the bands that correspond to the input features of the GTB model
   imageFeatures = image.select(ls_input_feat)
@@ -281,25 +261,6 @@ def applyGTB_ls5(image):
     .classify(trainedGTB_ls5)
     .set('missDate', missDate))
   return image.addBands(classifiedImage)
-
-
-# save each value as its own band and mask
-def extract_classes(image):
-  cl = image.select('classification')
-  cloud = cl.eq(0).rename('cloud').selfMask()
-  openWater = cl.eq(1).rename('openWater').selfMask()
-  lightNSSed = cl.eq(2).rename('lightNSSed').selfMask()
-  OSSed = cl.eq(3).rename('OSSed').selfMask()
-  dNSSed = cl.eq(4).rename('dNSSed').selfMask()
-  classified = cl.gte(0).rename('classified').selfMask()
-  img_addBand = (image.addBands(cloud)
-    .addBands(openWater)
-    .addBands(lightNSSed)
-    .addBands(OSSed)
-    .addBands(dNSSed)
-    .addBands(classified))
-  return img_addBand
-
 
 def applyPerMissionDate_ls5(missDate):
   mission = ee.String(missDate).slice(0,9)
@@ -312,50 +273,12 @@ def applyPerMissionDate_ls5(missDate):
   ls_GTB_class = extract_classes(ls_miss_date_GTB)
   return (ls_GTB_class.set('missDate', missDate))
 
-```
-
-### consolidate stack by image date
-
-```{python}
-def addImageDate(image):
-  mission = image.get('SPACECRAFT_ID')
-  date = image.date().format('YYYY-MM-dd')
-  missDate = ee.String(mission).cat('_').cat(ee.String(date))
-  return image.set('missDate', missDate)
-
-l5_aoi = l5_aoi.map(addImageDate)
-
-# summarize by missionDate field
-uniqueMissDate_l5 = l5_aoi.aggregate_array('missDate').distinct()
-
-```
-
-### Grab SR_ATMOS_OPACITY
-
-```{python}
-atmos_opac_l5 = l5_aoi.select('SR_ATMOS_OPACITY')
-
-def aggregate_atmos_opac(missDate):
-  mission = ee.String(missDate).slice(0,9)
-  date = ee.String(missDate).slice(10,20)
-  short_stack = (atmos_opac_l5
-    .filter(ee.Filter.eq('SPACECRAFT_ID', mission))
-    .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
-  oneMissDate = short_stack.max().multiply(0.001)
-  return (oneMissDate.set('missDate', missDate))
-
-atmos_opac_list = uniqueMissDate_l5.map(aggregate_atmos_opac)
-atmos_opac = ee.ImageCollection(atmos_opac_list)
-```
-
-### Create mosaics
-
-```{python}
 def mosaicStack_l5(missDate):
   md_GTB = applyPerMissionDate_ls5(missDate)
   return md_GTB
 
-newStack_list_l5 = uniqueMissDate_l5.map(mosaicStack_l5)
+
+newStack_list_l5 = uniqueMissDate_l5.map(gf.mosaicStack_l5)
 newStack_l5 = ee.ImageCollection(newStack_list_l5)
 
 ```
@@ -376,32 +299,6 @@ lightStack_l5 = newStack_l5.select([
 
 ## Export GeoTiffs to drive
 
-Load task checker!
-
-```{python}
-##Function for limiting the max number of tasks sent to
-#earth engine at one time to avoid time out errors
-def maximum_no_of_tasks(MaxNActive, waitingPeriod):
-  ##maintain a maximum number of active tasks
-  ## initialize submitting jobs
-  ts = list(ee.batch.Task.list())
-  NActive = 0
-  for task in ts:
-     if ('RUNNING' in str(task) or 'READY' in str(task)):
-         NActive += 1
-  ## wait if the number of current active tasks reach the maximum number
-  ## defined in MaxNActive
-  while (NActive >= MaxNActive):
-    time.sleep(waitingPeriod) # if reach or over maximum no. of active tasks, wait for 2min and check again
-    ts = list(ee.batch.Task.list())
-    NActive = 0
-    for task in ts:
-      if ('RUNNING' in str(task) or 'READY' in str(task)):
-        NActive += 1
-  return()
-
-```
-
 ### Raster Export
 
 First, we need to define a function to use the data from the multiple classified
@@ -410,13 +307,6 @@ bands to populate a single band.
 ```{python}
 fromlist = [0,1,2,3,4]
 tolist = [1,2,3,4,5]
-def classifications_to_one_band(image):
-  cl = image.select('classification').clip(aoi_ee.geometry())
-  img_classified = (cl
-    .remap(fromlist, tolist, defaultValue = -99)
-    .rename('reclass'))
-  return image.addBands(img_classified)
-
 ```
 
 
@@ -425,6 +315,7 @@ def classifications_to_one_band(image):
 ```{python}
 date_length_5 = len(uniqueMissDate_l5.getInfo())
 
+# export tif
 for d in range(date_length_5):
   md = uniqueMissDate_l5.get(d)
   print(md.getInfo())
@@ -432,8 +323,8 @@ for d in range(date_length_5):
   image = (newStack_l5
     .filter(ee.Filter.eq('missDate', md))
     .first()
-    .clip(aoi_ee.geometry()))
-  image_new_class = (classifications_to_one_band(image)
+    .gf.clip(aoi_ee.geometry()))
+  image_new_class = (gf.classifications_to_one_band(image)
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(
     image = image_new_class,
@@ -445,9 +336,35 @@ for d in range(date_length_5):
     maxPixels = 1e13)
   
   #Check how many existing tasks are running and take a break of 5 mins if it's >10
-  maximum_no_of_tasks(10, 5*60)
+  gf.maximum_no_of_tasks(10, 5*60)
   #Send next task.
   export_image.start()
+
+
+# # export as asset
+# for d in range(date_length_5):
+#   md = uniqueMissDate_l5.get(d)
+#   print(md.getInfo())
+#   print(str(d+1) + ' of ' + str(date_length_5))
+#   image = (newStack_l5
+#     .filter(ee.Filter.eq('missDate', md))
+#     .first()
+#     .gf.clip(aoi_ee.geometry()))
+#   image_new_class = (gf.classifications_to_one_band(image)
+#     .select('reclass'))
+#   export_image = ee.batch.Export.image.toAsset(
+#     image = image_new_class,
+#     region = aoi_ee.geometry(),
+#     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
+#     assetId = 'projects/ee-ross-superior/assets/LS5/GTB_LS5_'+str(md.getInfo())+'_v'+v_date,
+#     scale = 30,
+#     crs = img_crs,
+#     maxPixels = 1e13)
+#   
+#   #Check how many existing tasks are running and take a break of 5 mins if it's >10
+#   gf.maximum_no_of_tasks(10, 5*60)
+#   #Send next task.
+#   export_image.start()
 
 ```
 

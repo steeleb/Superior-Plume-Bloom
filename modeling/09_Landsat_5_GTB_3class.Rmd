@@ -134,7 +134,7 @@ print(training_conf_l5)
 training_conf_l5['mission'] = 'Landsat 5'
 training_conf_l5.reset_index(inplace = True)
 training_conf_l5 = training_conf_l5.rename(columns = {'level_0': 'class'})  
-training_conf_l5.to_csv('data/output/GTB_'+v_date+'_l5_training_confusion.csv', index = False)
+training_conf_l5.to_csv('data/output/GTB_3class_'+v_date+'_l5_training_confusion.csv', index = False)
 
 confusionMatrixGTB_ls5 = (testing_ls5
   .classify(trainedGTB_ls5)
@@ -153,7 +153,7 @@ print(confusion_l5)
 confusion_l5['mission'] = 'Landsat 5'
 confusion_l5.reset_index(inplace = True)
 confusion_l5 = confusion_l5.rename(columns = {'level_0': 'class'})  
-confusion_l5.to_csv('data/output/GTB_'+v_date+'_l5_confusion.csv', index = False)
+confusion_l5.to_csv('data/output/GTB_3class_'+v_date+'_l5_confusion.csv', index = False)
 
 acc_values_GTB_ls5 = (confusionMatrixGTB_ls5.accuracy().getInfo())
 print("GTB Confusion Overall Accuracy for Landsat 5: ", acc_values_GTB_ls5)
@@ -185,7 +185,7 @@ performance_collation = pd.DataFrame(
 
 # reset the index
 performance_collation.reset_index(inplace = True)
-performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS5_'+v_date+'_performance_stats.csv', index = False)
+performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS5_3class_'+v_date+'_performance_stats.csv', index = False)
 ```
 
 ## Apply model to image stack for Landsat
@@ -286,15 +286,11 @@ def extract_classes(image):
   cl = image.select('classification')
   cloud = cl.eq(0).rename('cloud').selfMask()
   openWater = cl.eq(1).rename('openWater').selfMask()
-  lightNSSed = cl.eq(2).rename('lightNSSed').selfMask()
-  OSSed = cl.eq(3).rename('OSSed').selfMask()
-  dNSSed = cl.eq(4).rename('dNSSed').selfMask()
+  sed = cl.eq(2).rename('sediment').selfMask()
   classified = cl.gte(0).rename('classified').selfMask()
   img_addBand = (image.addBands(cloud)
     .addBands(openWater)
-    .addBands(lightNSSed)
-    .addBands(OSSed)
-    .addBands(dNSSed)
+    .addBands(sed)
     .addBands(classified))
   return img_addBand
 
@@ -444,6 +440,30 @@ for d in range(date_length_5):
   maximum_no_of_tasks(10, 5*60)
   #Send next task.
   export_image.start()
+
+# for d in range(date_length_5):
+#   md = uniqueMissDate_l5.get(d)
+#   print(md.getInfo())
+#   print(str(d+1) + ' of ' + str(date_length_5))
+#   image = (newStack_l5
+#     .filter(ee.Filter.eq('missDate', md))
+#     .first()
+#     .clip(aoi_ee.geometry()))
+#   image_new_class = (classifications_to_one_band(image)
+#     .select('reclass'))
+#   export_image = ee.batch.Export.image.toAsset(
+#     image = image_new_class,
+#     region = aoi_ee.geometry(),
+#     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
+#     assetId = 'projects/ee-ross-superior/assets/LS5_3class/'+'GTB_LS5_3class_'+str(md.getInfo())+'_v'+v_date,
+#     scale = 30,
+#     crs = img_crs,
+#     maxPixels = 1e13)
+#   
+#   #Check how many existing tasks are running and take a break of 5 mins if it's >10
+#   maximum_no_of_tasks(10, 5*60)
+#   #Send next task.
+#   export_image.start()
 
 ```
 

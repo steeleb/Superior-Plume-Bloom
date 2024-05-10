@@ -1,7 +1,7 @@
 ---
-title: "eePlumB Develop and Apply GTB for Landsat 7"
+title: "eePlumB Develop and Apply GTB for Landsat 7 - 3 class model"
 author: "ROSSyndicate"
-date: "2024-04-26"
+date: "2024-01-25"
 output: html_document
 editor_options:
   markdown:
@@ -51,7 +51,6 @@ import os
 import time
 import pandas as pd
 
-# import the python functions used throughout this and other scripts
 import imp
 imp.load_source("gee_funx", "modeling/gee_functions.py")
 import gee_funx as gf
@@ -80,8 +79,8 @@ ee.Initialize(project = 'ee-ross-superior')
 These assets were created in the 03_Train_Test_Split.Rmd file
 
 ```{python}
-training_ls7 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/training_ls7_v2024")
-testing_ls7 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/validation_ls7_v2024")
+training_ls7 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/training_ls7_3class_v2024")
+testing_ls7 = ee.FeatureCollection("projects/ee-ross-superior/assets/train-test/validation_ls7_3class_v2024")
 ```
 
 ## Train the GTB model
@@ -91,9 +90,7 @@ ls_input_feat = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
 output_label = "class"
 class_values = (['cloud',
   'openWater',
-  'lightNearShoreSediment',
-  'offShoreSediment',
-  'darkNearShoreSediment'])
+  'sediment'])
 ```
 
 ### Landsat 7
@@ -136,7 +133,7 @@ print(training_conf_l7)
 training_conf_l7['mission'] = 'Landsat 7'
 training_conf_l7.reset_index(inplace = True)
 training_conf_l7 = training_conf_l7.rename(columns = {'level_0': 'class'})  
-training_conf_l7.to_csv('data/output/GTB_'+v_date+'_l7_training_confusion.csv', index = False)
+training_conf_l7.to_csv('data/output/GTB_3class_'+v_date+'_l7_training_confusion.csv', index = False)
 
 confusionMatrixGTB_ls7 = (testing_ls7
   .classify(trainedGTB_ls7)
@@ -155,7 +152,7 @@ print(confusion_l7)
 confusion_l7['mission'] = 'Landsat 7'
 confusion_l7.reset_index(inplace = True)
 confusion_l7 = confusion_l7.rename(columns = {'level_0': 'class'})  
-confusion_l7.to_csv('data/output/GTB_'+v_date+'_L7_confusion.csv', index = False)
+confusion_l7.to_csv('data/output/GTB_3class_'+v_date+'_L7_confusion.csv', index = False)
 
 acc_values_GTB_ls7 = (confusionMatrixGTB_ls7.accuracy().getInfo())
 print("GTB Confusion Overall Accuracy for Landsat 7: ", acc_values_GTB_ls7)
@@ -187,7 +184,7 @@ performance_collation = pd.DataFrame(
 
 # reset the index
 performance_collation.reset_index(inplace = True)
-performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS7_'+v_date+'_performance_stats.csv', index = False)
+performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS7_3class_'+v_date+'_performance_stats.csv', index = False)
 ```
 
 ## Apply model to image stack for Landsat
@@ -195,6 +192,8 @@ performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/outpu
 ### Load the image collection
 
 ```{python}
+bn = ["SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B7"]
+
 # filter stack for desired PRs
 ROWS = ee.List([27, 28])
 
@@ -203,7 +202,7 @@ l7 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
   .filter(ee.Filter.eq('WRS_PATH', 26))
   .filter(ee.Filter.inList('WRS_ROW', ROWS))
   .filter(ee.Filter.gte('IMAGE_QUALITY', 7))
-  .filter(ee.Filter.calendarRange(4,11,'month'))
+  .filter(ee.Filter.calendarRange(4, 11, 'month'))
   # mask high atmospheric opacity (conservative decision)
   .map(gf.mask_high_atmos_opac)
   # mask pixels with any qa flags
@@ -223,7 +222,13 @@ Engine Feature Collection.
 ```{python}
 aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
 
-aoi_area = aoi_ee.map(gf.calc_area).aggregate_sum('area_ha')
+#Calculate total area of AOI
+def calc_area(feat):
+  feat_area = feat.geometry().area()
+  feat_area_ha = ee.Number(feat_area).divide(1e5)
+  return feat.set('area_ha', feat_area_ha)
+
+aoi_area = aoi_ee.map(calc_area).aggregate_sum('area_ha')
 aoi_area_ha = aoi_area.getInfo()
 print('total AOI area: ', aoi_area_ha)
 ```
@@ -231,7 +236,27 @@ print('total AOI area: ', aoi_area_ha)
 And then clip each image by that aoi
 
 ```{python}
-l7_aoi = l7.map(gf.clip)
+# clip images to aoi
+def clip(image):
+  return image.clip(aoi_ee.geometry())
+
+l7_aoi = l7.map(clip)
+```
+
+Load other AOIs to summarize over
+
+```{python}
+aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')
+
+aoi_no_sc_area = aoi_no_sc_ee.map(calc_area).aggregate_sum('area_ha')
+aoi_no_sc_area_ha = aoi_no_sc_area.getInfo()
+print('total AOI area without shoreline contamination: ', aoi_no_sc_area_ha)
+
+aoi_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_shoreline_contamination')
+
+aoi_sc_area = aoi_sc_ee.map(calc_area).aggregate_sum('area_ha')
+aoi_sc_area_ha = aoi_sc_area.getInfo()
+print('total AOI area identified as shoreline contamination: ', aoi_sc_area_ha)
 ```
 
 #### Helper functions
@@ -240,22 +265,8 @@ l7_aoi = l7.map(gf.clip)
 # get CRS info
 img_crs = l7.first().projection()
 img_crsTrans = img_crs.getInfo().get('transform')
-```
 
-### consolidate stack by image date
-
-```{python}
-l7_aoi = l7_aoi.map(gf.addImageDate)
-
-# summarize by missionDate field
-uniqueMissDate_l7 = l7_aoi.aggregate_array('missDate').distinct()
-
-```
-
-### Create mosaics
-
-```{python}
-# need a couple of functions that refer to objects in this script
+#function to apply the GTB model
 def applyGTB_ls7(image):
   # Select the bands that correspond to the input features of the GTB model
   imageFeatures = image.select(ls_input_feat)
@@ -265,6 +276,21 @@ def applyGTB_ls7(image):
     .classify(trainedGTB_ls7)
     .set('missDate', missDate))
   return image.addBands(classifiedImage)
+
+
+# save each value as its own band and mask
+def extract_classes(image):
+  cl = image.select('classification')
+  cloud = cl.eq(0).rename('cloud').selfMask()
+  openWater = cl.eq(1).rename('openWater').selfMask()
+  sed = cl.eq(2).rename('sediment').selfMask()
+  classified = cl.gte(0).rename('classified').selfMask()
+  img_addBand = (image.addBands(cloud)
+    .addBands(openWater)
+    .addBands(sed)
+    .addBands(classified))
+  return img_addBand
+
 
 def applyPerMissionDate_ls7(missDate):
   mission = ee.String(missDate).slice(0,9)
@@ -277,11 +303,32 @@ def applyPerMissionDate_ls7(missDate):
   ls_GTB_class = extract_classes(ls_miss_date_GTB)
   return (ls_GTB_class.set('missDate', missDate))
 
+```
+
+### consolidate stack by image date
+
+```{python}
+def addImageDate(image):
+  mission = image.get('SPACECRAFT_ID')
+  date = image.date().format('YYYY-MM-dd')
+  missDate = ee.String(mission).cat('_').cat(ee.String(date))
+  return image.set('missDate', missDate)
+
+l7_aoi = l7_aoi.map(addImageDate)
+
+# summarize by missionDate field
+uniqueMissDate_l7 = l7_aoi.aggregate_array('missDate').distinct()
+
+```
+
+### Create mosaics
+
+```{python}
 def mosaicStack_l7(missDate):
-  md_GTB = gf.applyPerMissionDate_ls7(missDate)
+  md_GTB = applyPerMissionDate_ls7(missDate)
   return md_GTB
 
-newStack_list_l7 = uniqueMissDate_l7.map(gf.mosaicStack_l7)
+newStack_list_l7 = uniqueMissDate_l7.map(mosaicStack_l7)
 newStack_l7 = ee.ImageCollection(newStack_list_l7)
 
 ```
@@ -293,14 +340,39 @@ lightStack_l7 = newStack_l7.select([
     'classified',
     'cloud',
     'openWater',
-    'lightNSSed',
-    'OSSed',
-    'dNSSed'
+    'sediment'
     ])
 
 ```
 
+
 ## Export GeoTiffs to drive
+
+Load task checker!
+
+```{python}
+##Function for limiting the max number of tasks sent to
+#earth engine at one time to avoid time out errors
+def maximum_no_of_tasks(MaxNActive, waitingPeriod):
+  ##maintain a maximum number of active tasks
+  ## initialize submitting jobs
+  ts = list(ee.batch.Task.list())
+  NActive = 0
+  for task in ts:
+     if ('RUNNING' in str(task) or 'READY' in str(task)):
+         NActive += 1
+  ## wait if the number of current active tasks reach the maximum number
+  ## defined in MaxNActive
+  while (NActive >= MaxNActive):
+    time.sleep(waitingPeriod) # if reach or over maximum no. of active tasks, wait for 2min and check again
+    ts = list(ee.batch.Task.list())
+    NActive = 0
+    for task in ts:
+      if ('RUNNING' in str(task) or 'READY' in str(task)):
+        NActive += 1
+  return()
+
+```
 
 ### Raster Export
 
@@ -308,8 +380,15 @@ First, we need to define a function to use the data from the multiple classified
 bands to populate a single band.
 
 ```{python}
-fromlist = [0,1,2,3,4]
-tolist = [1,2,3,4,5]
+fromlist = [0,1,2]
+tolist = [1,2,3]
+def classifications_to_one_band(image):
+  cl = image.select('classification').clip(aoi_ee.geometry())
+  img_classified = (cl
+    .remap(fromlist, tolist, defaultValue = -99)
+    .rename('reclass'))
+  return image.addBands(img_classified)
+
 ```
 
 
@@ -318,7 +397,6 @@ tolist = [1,2,3,4,5]
 ```{python}
 date_length_7 = len(uniqueMissDate_l7.getInfo())
 
-# export tif
 for d in range(date_length_7):
   md = uniqueMissDate_l7.get(d)
   print(md.getInfo())
@@ -326,25 +404,23 @@ for d in range(date_length_7):
   image = (newStack_l7
     .filter(ee.Filter.eq('missDate', md))
     .first()
-    .gf.clip(aoi_ee.geometry()))
-  image_new_class = (gf.classifications_to_one_band(image)
+    .clip(aoi_ee.geometry()))
+  image_new_class = (classifications_to_one_band(image)
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(
     image = image_new_class,
     region = aoi_ee.geometry(),
     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    folder = 'GTB_LS7_v'+v_date,
+    folder = 'GTB_3class_LS7_v'+v_date,
     scale = 30,
     crs = img_crs,
     maxPixels = 1e13)
   
   #Check how many existing tasks are running and take a break of 5 mins if it's >10
-  gf.maximum_no_of_tasks(10, 5*60)
+  maximum_no_of_tasks(10, 5*60)
   #Send next task.
   export_image.start()
-
-
-# # export as asset
+  
 # for d in range(date_length_7):
 #   md = uniqueMissDate_l7.get(d)
 #   print(md.getInfo())
@@ -353,19 +429,19 @@ for d in range(date_length_7):
 #     .filter(ee.Filter.eq('missDate', md))
 #     .first()
 #     .clip(aoi_ee.geometry()))
-#   image_new_class = (gf.classifications_to_one_band(image)
+#   image_new_class = (classifications_to_one_band(image)
 #     .select('reclass'))
 #   export_image = ee.batch.Export.image.toAsset(
 #     image = image_new_class,
 #     region = aoi_ee.geometry(),
 #     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-#     assetId = 'projects/ee-ross-superior/assets/LS7/GTB_LS7_'+str(md.getInfo())+'_v'+v_date,
+#     assetId = 'projects/ee-ross-superior/assets/LS7_3class/'+'GTB_LS7_'+str(md.getInfo())+'_v'+v_date,
 #     scale = 30,
 #     crs = img_crs,
 #     maxPixels = 1e13)
 #   
 #   #Check how many existing tasks are running and take a break of 5 mins if it's >10
-#   gf.maximum_no_of_tasks(10, 5*60)
+#   maximum_no_of_tasks(10, 5*60)
 #   #Send next task.
 #   export_image.start()
 
