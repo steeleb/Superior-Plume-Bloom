@@ -1,4 +1,5 @@
 import ee
+import time
 
 aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
 aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')

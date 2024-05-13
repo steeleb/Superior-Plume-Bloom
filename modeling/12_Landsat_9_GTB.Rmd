@@ -220,34 +220,10 @@ Note, some AOIs are too big to load in here and use as 'virtual' ee Feature
 Collections. Given that, we have manually uploaded the shapefiles as an Earth
 Engine Feature Collection.
 
-```{python}
-aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
-
-aoi_area = aoi_ee.map(gf.calc_area).aggregate_sum('area_ha')
-aoi_area_ha = aoi_area.getInfo()
-print('total AOI area: ', aoi_area_ha)
-```
-
 And then clip each image by that aoi
 
 ```{python}
 l9_aoi = l9.map(gf.clip)
-```
-
-Load other AOIs to summarize over
-
-```{python}
-aoi_no_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_minus_shoreline_contamination')
-
-aoi_no_sc_area = aoi_no_sc_ee.map(gf.calc_area).aggregate_sum('area_ha')
-aoi_no_sc_area_ha = aoi_no_sc_area.getInfo()
-print('total AOI area without shoreline contamination: ', aoi_no_sc_area_ha)
-
-aoi_sc_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_shoreline_contamination')
-
-aoi_sc_area = aoi_sc_ee.map(gf.calc_area).aggregate_sum('area_ha')
-aoi_sc_area_ha = aoi_sc_area.getInfo()
-print('total AOI area identified as shoreline contamination: ', aoi_sc_area_ha)
 ```
 
 #### Helper functions
@@ -321,19 +297,13 @@ lightStack_l9 = newStack_l9.select([
 
 ### Raster Export
 
-First, we need to define a function to use the data from the multiple classified
-bands to populate a single band.
-
-```{python}
-fromlist = [0,1,2,3,4]
-tolist = [1,2,3,4,5]
-```
-
-
 ### GTB images for Landsat 9
 
 ```{python}
 date_length_9 = len(uniqueMissDate_l9.getInfo())
+
+def clip(image):
+  return image.clip(aoi_ee.geometry())
 
 # export as tif to drive
 for d in range(date_length_9):
@@ -343,7 +313,7 @@ for d in range(date_length_9):
   image = (newStack_l9
     .filter(ee.Filter.eq('missDate', md))
     .first()
-    .gf.clip(aoi_ee.geometry()))
+    .clip(aoi_ee.geometry()))
   image_new_class = (gf.classifications_to_one_band(image)
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(

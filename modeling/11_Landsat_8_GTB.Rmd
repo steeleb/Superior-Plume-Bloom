@@ -295,9 +295,7 @@ lightStack_l8 = newStack_l8.select([
 
 ## Export GeoTiffs to drive
 
-
 ### Raster Export
-
 
 ### GTB images for Landsat 8
 
@@ -320,7 +318,7 @@ for d in range(date_length_8):
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(
     image = image_new_class,
-    region = gf.aoi_ee.geometry(),
+    region = aoi_ee.geometry(),
     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
     folder = 'GTB_LS8_v'+v_date,
     scale = 30,
