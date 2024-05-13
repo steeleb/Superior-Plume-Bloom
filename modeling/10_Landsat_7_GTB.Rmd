@@ -51,11 +51,6 @@ import os
 import time
 import pandas as pd
 
-# import the python functions used throughout this and other scripts
-import imp
-imp.load_source("gee_funx", "modeling/gee_functions.py")
-import gee_funx as gf
-
 v_date = '2024-04-26'
 ```
 
@@ -65,14 +60,23 @@ v_date = '2024-04-26'
 ee.Authenticate()
 ```
 
-When your browser states 'Google Earth Engine authentication successful!', the
-authentication is complete. This authentication is valid for 7 days.
+When your browser states 'Google Earth Engine authentication successful!' or the
+console reads "TRUE", the
+authentication is complete. 
 
 Now, we need to initialize our GEE session. You may need to change the project 
 name to one you own if you do not have write access.
 
 ```{python}
 ee.Initialize(project = 'ee-ross-superior')
+```
+
+
+Import custom functions (these require ee.Authenticate())
+```{python}
+import imp
+imp.load_source("gee_funx", "modeling/gee_functions.py")
+import gee_funx as gf
 ```
 
 # Import assets
@@ -216,18 +220,6 @@ l7 = (ee.ImageCollection('LANDSAT/LE07/C02/T1_L2')
 
 ### Load modeling AOIs and clip stack
 
-Note, some AOIs are too big to load in here and use as 'virtual' ee Feature
-Collections. Given that, we have manually uploaded the shapefiles as an Earth
-Engine Feature Collection.
-
-```{python}
-aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
-
-aoi_area = aoi_ee.map(gf.calc_area).aggregate_sum('area_ha')
-aoi_area_ha = aoi_area.getInfo()
-print('total AOI area: ', aoi_area_ha)
-```
-
 And then clip each image by that aoi
 
 ```{python}
@@ -281,7 +273,7 @@ def mosaicStack_l7(missDate):
   md_GTB = gf.applyPerMissionDate_ls7(missDate)
   return md_GTB
 
-newStack_list_l7 = uniqueMissDate_l7.map(gf.mosaicStack_l7)
+newStack_list_l7 = uniqueMissDate_l7.map(mosaicStack_l7)
 newStack_l7 = ee.ImageCollection(newStack_list_l7)
 
 ```
@@ -302,23 +294,17 @@ lightStack_l7 = newStack_l7.select([
 
 ## Export GeoTiffs to drive
 
-### Raster Export
-
-First, we need to define a function to use the data from the multiple classified
-bands to populate a single band.
-
-```{python}
-fromlist = [0,1,2,3,4]
-tolist = [1,2,3,4,5]
-```
-
-
 ### GTB images for Landsat 7
 
 ```{python}
 date_length_7 = len(uniqueMissDate_l7.getInfo())
 
-# export tif
+aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
+
+def clip(image):
+  return image.clip(aoi_ee.geometry())
+
+# export tif to drive
 for d in range(date_length_7):
   md = uniqueMissDate_l7.get(d)
   print(md.getInfo())
@@ -326,14 +312,14 @@ for d in range(date_length_7):
   image = (newStack_l7
     .filter(ee.Filter.eq('missDate', md))
     .first()
-    .gf.clip(aoi_ee.geometry()))
+    .clip(aoi_ee.geometry()))
   image_new_class = (gf.classifications_to_one_band(image)
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(
     image = image_new_class,
     region = aoi_ee.geometry(),
     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    folder = 'GTB_LS7_v'+v_date,
+    folder = 'GTB_LS7_v'+ v_date,
     scale = 30,
     crs = img_crs,
     maxPixels = 1e13)

@@ -51,11 +51,6 @@ import os
 import time
 import pandas as pd
 
-# import the python functions used throughout this and other scripts
-import imp
-imp.load_source("gee_funx", "modeling/gee_functions.py")
-import gee_funx as gf
-
 v_date = '2024-04-26'
 ```
 
@@ -65,14 +60,23 @@ v_date = '2024-04-26'
 ee.Authenticate()
 ```
 
-When your browser states 'You are now authenticated with the gcloud CLI', the
-authentication is complete. This authentication is valid for 7 days.
+When your browser states 'Google Earth Engine authentication successful!' or the
+console reads "TRUE", the
+authentication is complete. 
 
 Now, we need to initialize our GEE session. You may need to change the project 
 name to one you own if you do not have write access.
 
 ```{python}
 ee.Initialize(project = 'ee-ross-superior')
+```
+
+
+Import custom functions (these require ee.Authenticate())
+```{python}
+import imp
+imp.load_source("gee_funx", "modeling/gee_functions.py")
+import gee_funx as gf
 ```
 
 # Import assets
@@ -278,7 +282,7 @@ def mosaicStack_l5(missDate):
   return md_GTB
 
 
-newStack_list_l5 = uniqueMissDate_l5.map(gf.mosaicStack_l5)
+newStack_list_l5 = uniqueMissDate_l5.map(mosaicStack_l5)
 newStack_l5 = ee.ImageCollection(newStack_list_l5)
 
 ```
@@ -299,21 +303,15 @@ lightStack_l5 = newStack_l5.select([
 
 ## Export GeoTiffs to drive
 
-### Raster Export
-
-First, we need to define a function to use the data from the multiple classified
-bands to populate a single band.
-
-```{python}
-fromlist = [0,1,2,3,4]
-tolist = [1,2,3,4,5]
-```
-
-
 ### GTB images for Landsat 5
 
 ```{python}
 date_length_5 = len(uniqueMissDate_l5.getInfo())
+
+aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
+
+def clip(image):
+  return image.clip(aoi_ee.geometry())
 
 # export tif
 for d in range(date_length_5):
@@ -323,14 +321,14 @@ for d in range(date_length_5):
   image = (newStack_l5
     .filter(ee.Filter.eq('missDate', md))
     .first()
-    .gf.clip(aoi_ee.geometry()))
+    .clip(aoi_ee.geometry()))
   image_new_class = (gf.classifications_to_one_band(image)
     .select('reclass'))
   export_image = ee.batch.Export.image.toDrive(
     image = image_new_class,
     region = aoi_ee.geometry(),
     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    folder = 'GTB_LS5_v'+v_date,
+    folder = 'GTB_LS5_v'+ v_date,
     scale = 30,
     crs = img_crs,
     maxPixels = 1e13)
@@ -349,7 +347,7 @@ for d in range(date_length_5):
 #   image = (newStack_l5
 #     .filter(ee.Filter.eq('missDate', md))
 #     .first()
-#     .gf.clip(aoi_ee.geometry()))
+#     .clip(aoi_ee.geometry()))
 #   image_new_class = (gf.classifications_to_one_band(image)
 #     .select('reclass'))
 #   export_image = ee.batch.Export.image.toAsset(

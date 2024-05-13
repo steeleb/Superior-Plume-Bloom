@@ -51,11 +51,6 @@ import os
 import time
 import pandas as pd
 
-# import the python functions used throughout this and other scripts
-import imp
-imp.load_source("gee_funx", "modeling/gee_functions.py")
-import gee_funx as gf
-
 v_date = '2024-04-26'
 ```
 
@@ -65,14 +60,23 @@ v_date = '2024-04-26'
 ee.Authenticate()
 ```
 
-When your browser states 'Google Earth Engine authentication successful!', the
-authentication is complete. This authentication is valid for 7 days.
+When your browser states 'Google Earth Engine authentication successful!' or the
+console reads "TRUE", the
+authentication is complete. 
 
 Now, we need to initialize our GEE session. You may need to change the project 
 name to one you own if you do not have write access.
 
 ```{python}
 ee.Initialize(project = 'ee-ross-superior')
+```
+
+
+Import custom functions (these require ee.Authenticate())
+```{python}
+import imp
+imp.load_source("gee_funx", "modeling/gee_functions.py")
+import gee_funx as gf
 ```
 
 # Import assets
@@ -258,7 +262,6 @@ def applyGTB_ls9(image):
     .set('missDate', missDate))
   return image.addBands(classifiedImage)
 
-
 def applyPerMissionDate_ls9(missDate):
   mission = ee.String(missDate).slice(0,9)
   date = ee.String(missDate).slice(10,20)
@@ -302,6 +305,8 @@ lightStack_l9 = newStack_l9.select([
 ```{python}
 date_length_9 = len(uniqueMissDate_l9.getInfo())
 
+aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
+
 def clip(image):
   return image.clip(aoi_ee.geometry())
 
@@ -339,14 +344,14 @@ for d in range(date_length_9):
 #   image = (newStack_l9
 #     .filter(ee.Filter.eq('missDate', md))
 #     .first()
-#     .gf.clip(aoi_ee.geometry()))
+#     .clip(aoi_ee.geometry()))
 #   image_new_class = (gf.classifications_to_one_band(image)
 #     .select('reclass'))
 #   export_image = ee.batch.Export.image.toAsset(
 #     image = image_new_class,
 #     region = aoi_ee.geometry(),
 #     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-#     assetId = 'projects/ee-ross-superior/assets/LS9/'+'GTB_LS9_'+str(md.getInfo())+'_v'+v_date,
+#     assetId = 'projects/ee-ross-superior/assets/LS9/GTB_LS9_'+str(md.getInfo())+'_v'+v_date,
 #     scale = 30,
 #     crs = img_crs,
 #     maxPixels = 1e13)
