@@ -1,7 +1,7 @@
  ---
 title: "eePlumB Develop and Apply GTB for Landsat 8"
 author: "ROSSyndicate"
-date: "2024-01-25"
+date: "2024-04-26"
 output: html_document
 editor_options:
   markdown:
@@ -300,15 +300,16 @@ lightStack_l8 = newStack_l8.select([
 ### GTB images for Landsat 8
 
 ```{python}
-date_length_8 = len(uniqueMissDate_l8.getInfo())
-
 aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
 
 def clip(image):
   return image.clip(aoi_ee.geometry())
 
+
+date_length_8 = len(uniqueMissDate_l8.getInfo())
+
 # export tif to drive
-for d in range(date_length_8):
+for d in range(63, date_length_8):
   md = uniqueMissDate_l8.get(d)
   print(md.getInfo())
   print(str(d+1) + ' of ' + str(date_length_8))
@@ -332,7 +333,7 @@ for d in range(date_length_8):
   #Send next task.
   export_image.start()
 
-  
+
 # # export as gee asset
 # for d in range(date_length_8):
 #   md = uniqueMissDate_l8.get(d)
