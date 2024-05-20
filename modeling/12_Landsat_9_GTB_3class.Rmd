@@ -270,7 +270,7 @@ performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/outpu
 <!--     .filter(ee.Filter.eq('DATE_ACQUIRED', date))) -->
 <!--   oneMissDate = short_stack.mean() -->
 <!--   ls_miss_date_GTB = applyGTB_ls9(oneMissDate) -->
-<!--   ls_GTB_class = extract_classes(ls_miss_date_GTB) -->
+<!--   ls_GTB_class = extract_3classes(ls_miss_date_GTB) -->
 <!--   return (ls_GTB_class.set('missDate', missDate)) -->
 
 <!-- def mosaicStack_l9(missDate): -->

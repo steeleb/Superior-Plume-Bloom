@@ -275,7 +275,7 @@ def applyPerMissionDate_ls7(missDate):
     .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
   oneMissDate = short_stack.mean()
   ls_miss_date_GTB = applyGTB_ls7(oneMissDate)
-  ls_GTB_class = extract_classes(ls_miss_date_GTB)
+  ls_GTB_class = extract_3classes(ls_miss_date_GTB)
   return (ls_GTB_class.set('missDate', missDate))
 
 

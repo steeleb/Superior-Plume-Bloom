@@ -284,21 +284,6 @@ def applyGTB_ls5(image):
     .set('missDate', missDate))
   return image.addBands(classifiedImage)
 
-
-# save each value as its own band and mask
-def extract_classes(image):
-  cl = image.select('classification')
-  cloud = cl.eq(0).rename('cloud').selfMask()
-  openWater = cl.eq(1).rename('openWater').selfMask()
-  sed = cl.eq(2).rename('sediment').selfMask()
-  classified = cl.gte(0).rename('classified').selfMask()
-  img_addBand = (image.addBands(cloud)
-    .addBands(openWater)
-    .addBands(sed)
-    .addBands(classified))
-  return img_addBand
-
-
 def applyPerMissionDate_ls5(missDate):
   mission = ee.String(missDate).slice(0,9)
   date = ee.String(missDate).slice(10,20)
@@ -307,7 +292,7 @@ def applyPerMissionDate_ls5(missDate):
     .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
   oneMissDate = short_stack.mean()
   ls_miss_date_GTB = applyGTB_ls5(oneMissDate)
-  ls_GTB_class = extract_classes(ls_miss_date_GTB)
+  ls_GTB_class = gf.extract_3classes(ls_miss_date_GTB)
   return (ls_GTB_class.set('missDate', missDate))
 
 ```
