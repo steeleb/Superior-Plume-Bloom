@@ -58,7 +58,6 @@ import ee
 import os
 import time
 import pandas as pd
-#import geopandas as gpd
 
 v_date = '2024-04-26'
 ```
@@ -213,23 +212,62 @@ ls8_validate <- anti_join(ls8_filt, ls8_train)
 
 ### Landsat 9
 
+Before we do a random split, let's see what classes are represetned across the dates:
+
 ```{r}
-# define the number of scenes that is ~ 70% of scenes
-ls9_seventyperc <- round((length(unique(ls9_filt$date)))*0.7, 0)
+ls9_filt %>% 
+  group_by(date) %>%
+  summarise(n = length(unique(class)))
+```
 
-# get unique train-val dates
-ls9_tv_dates <- ls9_filt %>% 
-  pluck("date") %>% 
-  unique()
+  date           n
+  <date>     <int>
+1 2021-11-06     4
+2 2022-05-05     4
+3 2022-05-21     5
+4 2022-06-06     3
+5 2022-07-24     2
 
-# sample 60% of the dates remaining
-train_dates <- sample(ls9_tv_dates, ls9_seventyperc)
+Eeep. only one image has all classes. 
 
+```{r}
+ls9_filt %>% 
+  group_by(date, class) %>% 
+  summarise(n = n()) %>% 
+  arrange(class)
+```
+
+  date       class                      n
+   <date>     <chr>                  <int>
+ 1 2021-11-06 cloud                     37
+ 2 2022-05-21 cloud                     44
+ 3 2022-06-06 cloud                     39
+ 4 2022-07-24 cloud                     72
+ 5 2021-11-06 darkNearShoreSediment      2
+ 6 2022-05-05 darkNearShoreSediment     12
+ 7 2022-05-21 darkNearShoreSediment     15
+ 8 2021-11-06 lightNearShoreSediment     7
+ 9 2022-05-05 lightNearShoreSediment    16
+10 2022-05-21 lightNearShoreSediment    29
+11 2022-06-06 lightNearShoreSediment     8
+12 2022-07-24 lightNearShoreSediment     4
+13 2021-11-06 offShoreSediment          19
+14 2022-05-05 offShoreSediment           4
+15 2022-05-21 offShoreSediment          33
+16 2022-06-06 offShoreSediment           9
+17 2022-05-05 openWater                 14
+18 2022-05-21 openWater                  5
+
+Good news, all classes are represented in more than one image. This is not ideal, 
+but I think we can just run with it. Because there is only one image with all
+classes represented, and there are only 5 image-dates, our test will have that 
+single image date with all classes represented.
+
+```{r}
+ls9_validate <- ls9_filt %>% 
+  filter(date == "2022-05-21")
 # and split the t-v dataset
-ls9_train <- ls9_filt %>% 
-  filter(date %in% train_dates)
-ls9_validate <- anti_join(ls9_filt, ls9_train)
-
+ls9_train <- anti_join(ls9_filt, ls9_validate)
 ```
 
 ### Sentinel 2
@@ -441,6 +479,10 @@ ee.batch.Export.table.toAsset(labels_ls8_train,
 ee.batch.Export.table.toAsset(labels_ls9_train, 
                             "LS9 Training", 
                             "projects/ee-ross-superior/assets/train-test/training_ls9_v2024").start()
+
+ee.batch.Export.table.toAsset(labels_sen_train, 
+                            "Sen Training", 
+                            "projects/ee-ross-superior/assets/train-test/training_sen_v2024").start()
 ```
 
 Validation:
@@ -461,6 +503,11 @@ ee.batch.Export.table.toAsset(labels_ls8_validate,
 ee.batch.Export.table.toAsset(labels_ls9_validate, 
                             "LS9 Validation", 
                             "projects/ee-ross-superior/assets/train-test/validation_ls9_v2024").start()
+
+ee.batch.Export.table.toAsset(labels_sen_validate, 
+                            "Sen Validation", 
+                            "projects/ee-ross-superior/assets/train-test/validation_sen_v2024").start()
+
 ```
 
 
