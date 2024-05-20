@@ -10,6 +10,8 @@ env/
 
 #knit output
 reports/images/*
+
+# terrible DS_Store files
 */.DS_Store
 .DS_Store
 
@@ -19,10 +21,7 @@ reports/images/*
 # pptx files (too big!)
 *.pptx
 
-# pptx files (too big!)
-*.pptx
-
-# Local only folders
+# ignore archive folders
 data/labels/archive/
 
 # eePlumB
