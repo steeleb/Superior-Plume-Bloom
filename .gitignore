@@ -19,6 +19,9 @@ reports/images/*
 # pptx files (too big!)
 *.pptx
 
+# pptx files (too big!)
+*.pptx
+
 # Local only folders
 data/labels/archive/
 
