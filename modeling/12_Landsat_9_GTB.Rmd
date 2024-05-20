@@ -169,6 +169,9 @@ fs_GTB_ls9 = (confusionMatrixGTB_ls9.fscore().getInfo())
 print('GTB fScore for each class: ', fs_GTB_ls9)
 ```
 
+Well, that's not great - all open water were misclassified as darkNearShoreSediment.
+Let's see if it's any better in the 3-class version. We'll exprot the performance
+stats anyway.
 
 ### Collate model stats, save to data folder
 
@@ -194,173 +197,174 @@ performance_collation.reset_index(inplace = True)
 performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS9_'+v_date+'_performance_stats.csv', index = False)
 ```
 
-## Apply model to image stack for Landsat
 
-### Load the image collection
+<!-- ## Apply model to image stack for Landsat -->
 
-```{python}
-# filter stack for desired PRs
-ROWS = ee.List([27, 28])
+<!-- ### Load the image collection -->
 
-l9 = (ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
-  .filter(ee.Filter.lt('CLOUD_COVER', 80))
-  .filter(ee.Filter.eq('WRS_PATH', 26))
-  .filter(ee.Filter.inList('WRS_ROW', ROWS))
-  .filter(ee.Filter.gte('IMAGE_QUALITY_OLI', 7))
-  .filter(ee.Filter.calendarRange(4, 11, 'month'))
-  # mask high aerosol
-  .map(gf.mask_high_aerosol)
-  # mask pixels with any qa flags
-  .map(gf.mask_qa_flags)
-  # mask saturated pixels
-  .map(gf.apply_radsat_mask)
-  # apply scaling factors
-  .map(gf.applyScaleFactors))
-```
+<!-- ```{python} -->
+<!-- # filter stack for desired PRs -->
+<!-- ROWS = ee.List([27, 28]) -->
 
-### Load modeling AOIs and clip stack
+<!-- l9 = (ee.ImageCollection("LANDSAT/LC09/C02/T1_L2") -->
+<!--   .filter(ee.Filter.lt('CLOUD_COVER', 80)) -->
+<!--   .filter(ee.Filter.eq('WRS_PATH', 26)) -->
+<!--   .filter(ee.Filter.inList('WRS_ROW', ROWS)) -->
+<!--   .filter(ee.Filter.gte('IMAGE_QUALITY_OLI', 7)) -->
+<!--   .filter(ee.Filter.calendarRange(4, 11, 'month')) -->
+<!--   # mask high aerosol -->
+<!--   .map(gf.mask_high_aerosol) -->
+<!--   # mask pixels with any qa flags -->
+<!--   .map(gf.mask_qa_flags) -->
+<!--   # mask saturated pixels -->
+<!--   .map(gf.apply_radsat_mask) -->
+<!--   # apply scaling factors -->
+<!--   .map(gf.applyScaleFactors)) -->
+<!-- ``` -->
 
-Note, some AOIs are too big to load in here and use as 'virtual' ee Feature
-Collections. Given that, we have manually uploaded the shapefiles as an Earth
-Engine Feature Collection.
+<!-- ### Load modeling AOIs and clip stack -->
 
-And then clip each image by that aoi
+<!-- Note, some AOIs are too big to load in here and use as 'virtual' ee Feature -->
+<!-- Collections. Given that, we have manually uploaded the shapefiles as an Earth -->
+<!-- Engine Feature Collection. -->
 
-```{python}
-l9_aoi = l9.map(gf.clip)
-```
+<!-- And then clip each image by that aoi -->
 
-#### Helper functions
+<!-- ```{python} -->
+<!-- l9_aoi = l9.map(gf.clip) -->
+<!-- ``` -->
 
-```{python}
-# get CRS info
-img_crs = l9.first().projection()
-img_crsTrans = img_crs.getInfo().get('transform')
-```
+<!-- #### Helper functions -->
 
-### Consolidate stack by image date
+<!-- ```{python} -->
+<!-- # get CRS info -->
+<!-- img_crs = l9.first().projection() -->
+<!-- img_crsTrans = img_crs.getInfo().get('transform') -->
+<!-- ``` -->
 
-```{python}
-l9_aoi = l9_aoi.map(gf.addImageDate)
+<!-- ### Consolidate stack by image date -->
 
-# summarize by missionDate field
-uniqueMissDate_l9 = l9_aoi.aggregate_array('missDate').distinct()
+<!-- ```{python} -->
+<!-- l9_aoi = l9_aoi.map(gf.addImageDate) -->
 
-```
+<!-- # summarize by missionDate field -->
+<!-- uniqueMissDate_l9 = l9_aoi.aggregate_array('missDate').distinct() -->
 
-### Create mosaics
+<!-- ``` -->
 
-```{python}
-# need a couple of functions that refer to objects in this script
-def applyGTB_ls9(image):
-  # Select the bands that correspond to the input features of the GTB model
-  imageFeatures = image.select(ls_input_feat)
-  missDate = image.get('missDate')
-  # Classify the image using the trained GTB model
-  classifiedImage = (imageFeatures
-    .classify(trainedGTB_ls9)
-    .set('missDate', missDate))
-  return image.addBands(classifiedImage)
+<!-- ### Create mosaics -->
 
-def applyPerMissionDate_ls9(missDate):
-  mission = ee.String(missDate).slice(0,9)
-  date = ee.String(missDate).slice(10,20)
-  short_stack = (l9
-    .filter(ee.Filter.eq('SPACECRAFT_ID', mission))
-    .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
-  oneMissDate = short_stack.mean()
-  ls_miss_date_GTB = applyGTB_ls9(oneMissDate)
-  ls_GTB_class = gf.extract_classes(ls_miss_date_GTB)
-  return (ls_GTB_class.set('missDate', missDate))
+<!-- ```{python} -->
+<!-- # need a couple of functions that refer to objects in this script -->
+<!-- def applyGTB_ls9(image): -->
+<!--   # Select the bands that correspond to the input features of the GTB model -->
+<!--   imageFeatures = image.select(ls_input_feat) -->
+<!--   missDate = image.get('missDate') -->
+<!--   # Classify the image using the trained GTB model -->
+<!--   classifiedImage = (imageFeatures -->
+<!--     .classify(trainedGTB_ls9) -->
+<!--     .set('missDate', missDate)) -->
+<!--   return image.addBands(classifiedImage) -->
 
-def mosaicStack_l9(missDate):
-  md_GTB = applyPerMissionDate_ls9(missDate)
-  return md_GTB
+<!-- def applyPerMissionDate_ls9(missDate): -->
+<!--   mission = ee.String(missDate).slice(0,9) -->
+<!--   date = ee.String(missDate).slice(10,20) -->
+<!--   short_stack = (l9 -->
+<!--     .filter(ee.Filter.eq('SPACECRAFT_ID', mission)) -->
+<!--     .filter(ee.Filter.eq('DATE_ACQUIRED', date))) -->
+<!--   oneMissDate = short_stack.mean() -->
+<!--   ls_miss_date_GTB = applyGTB_ls9(oneMissDate) -->
+<!--   ls_GTB_class = gf.extract_classes(ls_miss_date_GTB) -->
+<!--   return (ls_GTB_class.set('missDate', missDate)) -->
 
-newStack_list_l9 = uniqueMissDate_l9.map(mosaicStack_l9)
-newStack_l9 = ee.ImageCollection(newStack_list_l9)
+<!-- def mosaicStack_l9(missDate): -->
+<!--   md_GTB = applyPerMissionDate_ls9(missDate) -->
+<!--   return md_GTB -->
 
-```
+<!-- newStack_list_l9 = uniqueMissDate_l9.map(mosaicStack_l9) -->
+<!-- newStack_l9 = ee.ImageCollection(newStack_list_l9) -->
 
-### Lighten up each of the stacks to only the bands we care about
+<!-- ``` -->
 
-```{python}
-lightStack_l9 = newStack_l9.select([
-    'classified',
-    'cloud',
-    'openWater',
-    'lightNSSed',
-    'OSSed',
-    'dNSSed'
-    ])
+<!-- ### Lighten up each of the stacks to only the bands we care about -->
 
-```
+<!-- ```{python} -->
+<!-- lightStack_l9 = newStack_l9.select([ -->
+<!--     'classified', -->
+<!--     'cloud', -->
+<!--     'openWater', -->
+<!--     'lightNSSed', -->
+<!--     'OSSed', -->
+<!--     'dNSSed' -->
+<!--     ]) -->
 
-## Export GeoTiffs to drive
+<!-- ``` -->
 
-### Raster Export
+<!-- ## Export GeoTiffs to drive -->
 
-### GTB images for Landsat 9
+<!-- ### Raster Export -->
 
-```{python}
-date_length_9 = len(uniqueMissDate_l9.getInfo())
+<!-- ### GTB images for Landsat 9 -->
 
-aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
+<!-- ```{python} -->
+<!-- date_length_9 = len(uniqueMissDate_l9.getInfo()) -->
 
-def clip(image):
-  return image.clip(aoi_ee.geometry())
+<!-- aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling') -->
 
-# export as tif to drive
-for d in range(date_length_9):
-  md = uniqueMissDate_l9.get(d)
-  print(md.getInfo())
-  print(str(d+1) + ' of ' + str(date_length_9))
-  image = (newStack_l9
-    .filter(ee.Filter.eq('missDate', md))
-    .first()
-    .clip(aoi_ee.geometry()))
-  image_new_class = (gf.classifications_to_one_band(image)
-    .select('reclass'))
-  export_image = ee.batch.Export.image.toDrive(
-    image = image_new_class,
-    region = aoi_ee.geometry(),
-    description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    folder = 'GTB_LS9_v'+v_date,
-    scale = 30,
-    crs = img_crs,
-    maxPixels = 1e13)
-  
-  #Check how many existing tasks are running and take a break of 5 mins if it's >10
-  gf.maximum_no_of_tasks(10, 5*60)
-  #Send next task.
-  export_image.start()
+<!-- def clip(image): -->
+<!--   return image.clip(aoi_ee.geometry()) -->
+
+<!-- # export as tif to drive -->
+<!-- for d in range(date_length_9): -->
+<!--   md = uniqueMissDate_l9.get(d) -->
+<!--   print(md.getInfo()) -->
+<!--   print(str(d+1) + ' of ' + str(date_length_9)) -->
+<!--   image = (newStack_l9 -->
+<!--     .filter(ee.Filter.eq('missDate', md)) -->
+<!--     .first() -->
+<!--     .clip(aoi_ee.geometry())) -->
+<!--   image_new_class = (gf.classifications_to_one_band(image) -->
+<!--     .select('reclass')) -->
+<!--   export_image = ee.batch.Export.image.toDrive( -->
+<!--     image = image_new_class, -->
+<!--     region = aoi_ee.geometry(), -->
+<!--     description = 'GTB_v' + v_date + '_' + str(md.getInfo()), -->
+<!--     folder = 'GTB_LS9_v'+v_date, -->
+<!--     scale = 30, -->
+<!--     crs = img_crs, -->
+<!--     maxPixels = 1e13) -->
+
+<!--   #Check how many existing tasks are running and take a break of 5 mins if it's >10 -->
+<!--   gf.maximum_no_of_tasks(10, 5*60) -->
+<!--   #Send next task. -->
+<!--   export_image.start() -->
 
 
-# # export as GEE asset
-# for d in range(date_length_9):
-#   md = uniqueMissDate_l9.get(d)
-#   print(md.getInfo())
-#   print(str(d+1) + ' of ' + str(date_length_9))
-#   image = (newStack_l9
-#     .filter(ee.Filter.eq('missDate', md))
-#     .first()
-#     .clip(aoi_ee.geometry()))
-#   image_new_class = (gf.classifications_to_one_band(image)
-#     .select('reclass'))
-#   export_image = ee.batch.Export.image.toAsset(
-#     image = image_new_class,
-#     region = aoi_ee.geometry(),
-#     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-#     assetId = 'projects/ee-ross-superior/assets/LS9/GTB_LS9_'+str(md.getInfo())+'_v'+v_date,
-#     scale = 30,
-#     crs = img_crs,
-#     maxPixels = 1e13)
-#   
-#   #Check how many existing tasks are running and take a break of 5 mins if it's >10
-#   gf.maximum_no_of_tasks(10, 5*60)
-#   #Send next task.
-#   export_image.start()
+<!-- # # export as GEE asset -->
+<!-- # for d in range(date_length_9): -->
+<!-- #   md = uniqueMissDate_l9.get(d) -->
+<!-- #   print(md.getInfo()) -->
+<!-- #   print(str(d+1) + ' of ' + str(date_length_9)) -->
+<!-- #   image = (newStack_l9 -->
+<!-- #     .filter(ee.Filter.eq('missDate', md)) -->
+<!-- #     .first() -->
+<!-- #     .clip(aoi_ee.geometry())) -->
+<!-- #   image_new_class = (gf.classifications_to_one_band(image) -->
+<!-- #     .select('reclass')) -->
+<!-- #   export_image = ee.batch.Export.image.toAsset( -->
+<!-- #     image = image_new_class, -->
+<!-- #     region = aoi_ee.geometry(), -->
+<!-- #     description = 'GTB_v' + v_date + '_' + str(md.getInfo()), -->
+<!-- #     assetId = 'projects/ee-ross-superior/assets/LS9/GTB_LS9_'+str(md.getInfo())+'_v'+v_date, -->
+<!-- #     scale = 30, -->
+<!-- #     crs = img_crs, -->
+<!-- #     maxPixels = 1e13) -->
+<!-- #    -->
+<!-- #   #Check how many existing tasks are running and take a break of 5 mins if it's >10 -->
+<!-- #   gf.maximum_no_of_tasks(10, 5*60) -->
+<!-- #   #Send next task. -->
+<!-- #   export_image.start() -->
 
-```
+<!-- ``` -->
 
 

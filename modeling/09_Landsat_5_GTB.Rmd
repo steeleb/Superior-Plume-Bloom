@@ -194,176 +194,176 @@ performance_collation.reset_index(inplace = True)
 performance_collation.rename(columns = {'index':'satellite'}).to_csv('data/output/GTB_LS5_'+v_date+'_performance_stats.csv', index = False)
 ```
 
-## Apply model to image stack for Landsat
+<!-- ## Apply model to image stack for Landsat -->
 
-### Load the image collection
+<!-- ### Load the image collection -->
 
-```{python}
-# filter stack for desired PRs
-ROWS = ee.List([27, 28])
+<!-- ```{python} -->
+<!-- # filter stack for desired PRs -->
+<!-- ROWS = ee.List([27, 28]) -->
 
-l5 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2')
-  .filter(ee.Filter.lt('CLOUD_COVER', 80))
-  .filter(ee.Filter.eq('WRS_PATH', 26))
-  .filter(ee.Filter.inList('WRS_ROW', ROWS))
-  .filter(ee.Filter.gte('IMAGE_QUALITY', 7))
-  .filter(ee.Filter.calendarRange(4, 11, 'month'))
-  # mask high atmospheric opacity (conservative decision)
-  .map(gf.mask_high_atmos_opac)
-  # mask pixels with any qa flags
-  .map(gf.mask_qa_flags)
-  # mask saturated pixels
-  .map(gf.apply_radsat_mask)
-  # apply scaling factors
-  .map(gf.applyScaleFactors))
-```
+<!-- l5 = (ee.ImageCollection('LANDSAT/LT05/C02/T1_L2') -->
+<!--   .filter(ee.Filter.lt('CLOUD_COVER', 80)) -->
+<!--   .filter(ee.Filter.eq('WRS_PATH', 26)) -->
+<!--   .filter(ee.Filter.inList('WRS_ROW', ROWS)) -->
+<!--   .filter(ee.Filter.gte('IMAGE_QUALITY', 7)) -->
+<!--   .filter(ee.Filter.calendarRange(4, 11, 'month')) -->
+<!--   # mask high atmospheric opacity (conservative decision) -->
+<!--   .map(gf.mask_high_atmos_opac) -->
+<!--   # mask pixels with any qa flags -->
+<!--   .map(gf.mask_qa_flags) -->
+<!--   # mask saturated pixels -->
+<!--   .map(gf.apply_radsat_mask) -->
+<!--   # apply scaling factors -->
+<!--   .map(gf.applyScaleFactors)) -->
+<!-- ``` -->
 
-### Load modeling AOIs and clip stack
+<!-- ### Load modeling AOIs and clip stack -->
 
-Note, some AOIs are too big to load in here and use as 'virtual' ee Feature
-Collections. Given that, we have manually uploaded the shapefiles as an Earth
-Engine Feature Collection.
+<!-- Note, some AOIs are too big to load in here and use as 'virtual' ee Feature -->
+<!-- Collections. Given that, we have manually uploaded the shapefiles as an Earth -->
+<!-- Engine Feature Collection. -->
 
-```{python}
-aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
-```
+<!-- ```{python} -->
+<!-- aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling') -->
+<!-- ``` -->
 
-And then clip each image by that aoi
+<!-- And then clip each image by that aoi -->
 
-```{python}
-l5_aoi = l5.map(gf.clip)
-```
+<!-- ```{python} -->
+<!-- l5_aoi = l5.map(gf.clip) -->
+<!-- ``` -->
 
-#### Helper functions
+<!-- #### Helper functions -->
 
-```{python}
-# get CRS info
-img_crs = l5.first().projection()
-img_crsTrans = img_crs.getInfo().get('transform')
-```
+<!-- ```{python} -->
+<!-- # get CRS info -->
+<!-- img_crs = l5.first().projection() -->
+<!-- img_crsTrans = img_crs.getInfo().get('transform') -->
+<!-- ``` -->
 
-### consolidate stack by image date
+<!-- ### consolidate stack by image date -->
 
-```{python}
-l5_aoi = l5_aoi.map(gf.addImageDate)
+<!-- ```{python} -->
+<!-- l5_aoi = l5_aoi.map(gf.addImageDate) -->
 
-# summarize by missionDate field
-uniqueMissDate_l5 = l5_aoi.aggregate_array('missDate').distinct()
+<!-- # summarize by missionDate field -->
+<!-- uniqueMissDate_l5 = l5_aoi.aggregate_array('missDate').distinct() -->
 
-```
+<!-- ``` -->
 
-### Create mosaics
+<!-- ### Create mosaics -->
 
-```{python}
-# need a couple of functions that refer to objects in this script
-def applyGTB_ls5(image):
-  # Select the bands that correspond to the input features of the GTB model
-  imageFeatures = image.select(ls_input_feat)
-  missDate = image.get('missDate')
-  # Classify the image using the trained GTB model
-  classifiedImage = (imageFeatures
-    .classify(trainedGTB_ls5)
-    .set('missDate', missDate))
-  return image.addBands(classifiedImage)
+<!-- ```{python} -->
+<!-- # need a couple of functions that refer to objects in this script -->
+<!-- def applyGTB_ls5(image): -->
+<!--   # Select the bands that correspond to the input features of the GTB model -->
+<!--   imageFeatures = image.select(ls_input_feat) -->
+<!--   missDate = image.get('missDate') -->
+<!--   # Classify the image using the trained GTB model -->
+<!--   classifiedImage = (imageFeatures -->
+<!--     .classify(trainedGTB_ls5) -->
+<!--     .set('missDate', missDate)) -->
+<!--   return image.addBands(classifiedImage) -->
 
-def applyPerMissionDate_ls5(missDate):
-  mission = ee.String(missDate).slice(0,9)
-  date = ee.String(missDate).slice(10,20)
-  short_stack = (l5_aoi
-    .filter(ee.Filter.eq('SPACECRAFT_ID', mission))
-    .filter(ee.Filter.eq('DATE_ACQUIRED', date)))
-  oneMissDate = short_stack.mean()
-  ls_miss_date_GTB = applyGTB_ls5(oneMissDate)
-  ls_GTB_class = extract_classes(ls_miss_date_GTB)
-  return (ls_GTB_class.set('missDate', missDate))
+<!-- def applyPerMissionDate_ls5(missDate): -->
+<!--   mission = ee.String(missDate).slice(0,9) -->
+<!--   date = ee.String(missDate).slice(10,20) -->
+<!--   short_stack = (l5_aoi -->
+<!--     .filter(ee.Filter.eq('SPACECRAFT_ID', mission)) -->
+<!--     .filter(ee.Filter.eq('DATE_ACQUIRED', date))) -->
+<!--   oneMissDate = short_stack.mean() -->
+<!--   ls_miss_date_GTB = applyGTB_ls5(oneMissDate) -->
+<!--   ls_GTB_class = extract_classes(ls_miss_date_GTB) -->
+<!--   return (ls_GTB_class.set('missDate', missDate)) -->
 
-def mosaicStack_l5(missDate):
-  md_GTB = applyPerMissionDate_ls5(missDate)
-  return md_GTB
-
-
-newStack_list_l5 = uniqueMissDate_l5.map(mosaicStack_l5)
-newStack_l5 = ee.ImageCollection(newStack_list_l5)
-
-```
-
-### Lighten up each of the stacks to only the bands we care about
-
-```{python}
-lightStack_l5 = newStack_l5.select([
-    'classified',
-    'cloud',
-    'openWater',
-    'lightNSSed',
-    'OSSed',
-    'dNSSed'
-    ])
-    
-```
-
-## Export GeoTiffs to drive
-
-### GTB images for Landsat 5
-
-```{python}
-date_length_5 = len(uniqueMissDate_l5.getInfo())
-
-aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling')
-
-def clip(image):
-  return image.clip(aoi_ee.geometry())
-
-# export tif
-for d in range(date_length_5):
-  md = uniqueMissDate_l5.get(d)
-  print(md.getInfo())
-  print(str(d+1) + ' of ' + str(date_length_5))
-  image = (newStack_l5
-    .filter(ee.Filter.eq('missDate', md))
-    .first()
-    .clip(aoi_ee.geometry()))
-  image_new_class = (gf.classifications_to_one_band(image)
-    .select('reclass'))
-  export_image = ee.batch.Export.image.toDrive(
-    image = image_new_class,
-    region = aoi_ee.geometry(),
-    description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-    folder = 'GTB_LS5_v'+ v_date,
-    scale = 30,
-    crs = img_crs,
-    maxPixels = 1e13)
-  
-  #Check how many existing tasks are running and take a break of 5 mins if it's >10
-  gf.maximum_no_of_tasks(10, 5*60)
-  #Send next task.
-  export_image.start()
+<!-- def mosaicStack_l5(missDate): -->
+<!--   md_GTB = applyPerMissionDate_ls5(missDate) -->
+<!--   return md_GTB -->
 
 
-# # export as asset
-# for d in range(date_length_5):
-#   md = uniqueMissDate_l5.get(d)
-#   print(md.getInfo())
-#   print(str(d+1) + ' of ' + str(date_length_5))
-#   image = (newStack_l5
-#     .filter(ee.Filter.eq('missDate', md))
-#     .first()
-#     .clip(aoi_ee.geometry()))
-#   image_new_class = (gf.classifications_to_one_band(image)
-#     .select('reclass'))
-#   export_image = ee.batch.Export.image.toAsset(
-#     image = image_new_class,
-#     region = aoi_ee.geometry(),
-#     description = 'GTB_v' + v_date + '_' + str(md.getInfo()),
-#     assetId = 'projects/ee-ross-superior/assets/LS5/GTB_LS5_'+str(md.getInfo())+'_v'+v_date,
-#     scale = 30,
-#     crs = img_crs,
-#     maxPixels = 1e13)
-#   
-#   #Check how many existing tasks are running and take a break of 5 mins if it's >10
-#   gf.maximum_no_of_tasks(10, 5*60)
-#   #Send next task.
-#   export_image.start()
+<!-- newStack_list_l5 = uniqueMissDate_l5.map(mosaicStack_l5) -->
+<!-- newStack_l5 = ee.ImageCollection(newStack_list_l5) -->
 
-```
+<!-- ``` -->
+
+<!-- ### Lighten up each of the stacks to only the bands we care about -->
+
+<!-- ```{python} -->
+<!-- lightStack_l5 = newStack_l5.select([ -->
+<!--     'classified', -->
+<!--     'cloud', -->
+<!--     'openWater', -->
+<!--     'lightNSSed', -->
+<!--     'OSSed', -->
+<!--     'dNSSed' -->
+<!--     ]) -->
+
+<!-- ``` -->
+
+<!-- ## Export GeoTiffs to drive -->
+
+<!-- ### GTB images for Landsat 5 -->
+
+<!-- ```{python} -->
+<!-- date_length_5 = len(uniqueMissDate_l5.getInfo()) -->
+
+<!-- aoi_ee = ee.FeatureCollection('projects/ee-ross-superior/assets/aoi/Superior_AOI_modeling') -->
+
+<!-- def clip(image): -->
+<!--   return image.clip(aoi_ee.geometry()) -->
+
+<!-- # export tif -->
+<!-- for d in range(date_length_5): -->
+<!--   md = uniqueMissDate_l5.get(d) -->
+<!--   print(md.getInfo()) -->
+<!--   print(str(d+1) + ' of ' + str(date_length_5)) -->
+<!--   image = (newStack_l5 -->
+<!--     .filter(ee.Filter.eq('missDate', md)) -->
+<!--     .first() -->
+<!--     .clip(aoi_ee.geometry())) -->
+<!--   image_new_class = (gf.classifications_to_one_band(image) -->
+<!--     .select('reclass')) -->
+<!--   export_image = ee.batch.Export.image.toDrive( -->
+<!--     image = image_new_class, -->
+<!--     region = aoi_ee.geometry(), -->
+<!--     description = 'GTB_v' + v_date + '_' + str(md.getInfo()), -->
+<!--     folder = 'GTB_LS5_v'+ v_date, -->
+<!--     scale = 30, -->
+<!--     crs = img_crs, -->
+<!--     maxPixels = 1e13) -->
+
+<!--   #Check how many existing tasks are running and take a break of 5 mins if it's >10 -->
+<!--   gf.maximum_no_of_tasks(10, 5*60) -->
+<!--   #Send next task. -->
+<!--   export_image.start() -->
+
+
+<!-- # # export as asset -->
+<!-- # for d in range(date_length_5): -->
+<!-- #   md = uniqueMissDate_l5.get(d) -->
+<!-- #   print(md.getInfo()) -->
+<!-- #   print(str(d+1) + ' of ' + str(date_length_5)) -->
+<!-- #   image = (newStack_l5 -->
+<!-- #     .filter(ee.Filter.eq('missDate', md)) -->
+<!-- #     .first() -->
+<!-- #     .clip(aoi_ee.geometry())) -->
+<!-- #   image_new_class = (gf.classifications_to_one_band(image) -->
+<!-- #     .select('reclass')) -->
+<!-- #   export_image = ee.batch.Export.image.toAsset( -->
+<!-- #     image = image_new_class, -->
+<!-- #     region = aoi_ee.geometry(), -->
+<!-- #     description = 'GTB_v' + v_date + '_' + str(md.getInfo()), -->
+<!-- #     assetId = 'projects/ee-ross-superior/assets/LS5/GTB_LS5_'+str(md.getInfo())+'_v'+v_date, -->
+<!-- #     scale = 30, -->
+<!-- #     crs = img_crs, -->
+<!-- #     maxPixels = 1e13) -->
+<!-- #    -->
+<!-- #   #Check how many existing tasks are running and take a break of 5 mins if it's >10 -->
+<!-- #   gf.maximum_no_of_tasks(10, 5*60) -->
+<!-- #   #Send next task. -->
+<!-- #   export_image.start() -->
+
+<!-- ``` -->
 
 
