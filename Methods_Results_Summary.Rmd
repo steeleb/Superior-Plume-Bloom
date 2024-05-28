@@ -22,7 +22,8 @@ package_loader <- function(x) {
 
 invisible(lapply(packages, package_loader))
 
-model_version = "2024-01-08"
+model_version = "2024-04-26"
+
 ```
 
 # Introduction
@@ -47,9 +48,9 @@ Landsat archive from the mid '80s through the recent past (e.g., [@amani2022]).
 In the recent past, much attention has been paid to the apparent proliferation
 of algal blooms in some of the clearest lakes, including Lake Superior (cite).
 While detecting algal blooms from moderate-resolution satellite imagery is
-difficult due to low temporal frequency, time of day of acquisition, pixel size,
-and spectral band metrics (cite), as well as the lack of observed,
-spatially-explicit bloom observations to validate presence and absence,
+difficult due to low temporal revisit frequency, time of day of acquisition,
+pixel size, and spectral band metrics (cite), as well as the lack of observed,
+spatially-explicit bloom observations to validate presence and absence, visually
 detecting sediment plumes (which often precede algal blooms) is relatively easy
 with just the red, green, and blue bands common on nearly all
 moderate-resolution satellites.
@@ -79,56 +80,160 @@ western extent of Lake Superior, the Apostle Islands, and Chequamegon Bay."
 
 ## eePlumB
 
+```{r echo=FALSE}
+labels <- read_csv("data/labels/collated_label_data_v2023-07-20.csv") %>% 
+  mutate(missDate = paste(mission, date, sep = "_"))
+mod_labels <- labels %>% 
+  filter(class %in% c("openWater", "cloud", "lightNearShoreSediment", "darkNearShoreSediment", "offShoreSediment"))
+tvt_files <- list.files("data/labels/", pattern = "tvt", full.names = T)
+for_tvt <- map(.x = tvt_files,
+               .f = ~ read_rds(.x)) %>% 
+  bind_rows()
+```
+
 Using the overarching architecture presented in the Global Rivers Obstruction
 Database (GROD) [@yang2022] to engage volunteer observers, we crowdsourced class
 labels for Landsat and Sentinel-2 images for the following classes: 'cloud',
 'open water', 'light near shore sediment', 'dark near shore sediment', 'offshore
 sediment', 'shoreline contamination', 'other', and 'algae bloom' using our Earth
 Engine Plume and Bloom labeling interface ("eePlumB"). Dates for labeling were
-limited to the months of April through November to avoid ice-on.
+limited to the months of April through November to avoid ice-on. During 2023,
+`r length(unique(labels$vol_init))` volunteers labeled
+`r length(unique(labels$missDate))` images resulting in a total of
+`r nrow(labels)` labels within these classes. When the label set was limited to
+open water, cloud, and sediment classes, `r nrow(mod_labels)` labels remained.
 
-In order to eliminate outlier band information and reduce noise in the input for
-our models, the second and ninety-eighth percentiles were calculated for each
-mission-band combination and label data associated with values outside of those
-cutoffs were dropped from the analysis. [[Could add the
-`02_label_class_summaries.Rmd` as supplemental.]]
+Though the eePlumB architecture was based on GROD, a major difference between
+the two applications was GROD labeled the most recent cloud-free image, and in
+eePlumB, we wanted to label multiple images across many satellites. This
+required a bit more volunteer savvy in the eePlumB module. Because eePlumb was
+not robustly designed for user experience, it was possible to export label data
+that did not match the user-entered mission or date if the directions were not
+followed precisely. In order to assure that the volunteer data were valid, we
+re-pulled the data based on the volunteer-exported mission, date, and lat/lon
+values. In order to provide verified data for band values across the open water
+and sediment categories, numerous quality checks were performed:
+
+1.  Any label that contained band names that were not part of the mission listed
+    were automatically dismissed (e.g. if a Landsat 5 image listed B6, which is
+    a thermal band and not exported as part of the Landsat 5 stack, the instance
+    was removed)
+
+2.  If the volunteer-pulled band value did not match the re-pull value for a
+    majority of the labels in a given mission date, the mission date was
+    dismissed
+
+3.  Labels that were flagged by the Landsat or Sentinel QA bands and bits were
+    dismissed (see Table XXX below for QA pixel masks)
+
+4.  Labels belonged to a scene where there was scene-level contamination (cirrus
+    clouds or atmospheric correction issues visible).
+
+Any remaining extreme outlier in these classes (defined as \> 1.5\*IQR per band
+per class) was retained if it was not dismissed in the above steps. Rendered
+code (as .htmls) detailing these decisions is available in the Superior Plume
+Bloom repository in the sub directory `modeling`, scripts 01-06. Generally
+speaking, all cloud labels were kept as long as the pixel would not have been
+masked as 'saturated' (QA_RADSAT == 0 for cloud label to be retained).
+
+After the QA steps, `r nrow(for_tvt)` labels remained, Table 1 details the
+remaining labels for building our classification models.
+
+```{r echo=FALSE}
+mission_class_summary <- for_tvt %>% 
+  group_by(mission, class) %>% 
+  summarize(n_labels = n()) %>% 
+  pivot_wider(names_from = "class", values_from = "n_labels")  %>% 
+  rename(`dark near shore sediment` = darkNearShoreSediment,
+         `light near shore sediment` = lightNearShoreSediment,
+         `off shore sediment` = offShoreSediment,
+         `open water` = openWater)
+mission_date_summary <- for_tvt %>% 
+  group_by(mission) %>% 
+  summarize(`number of unique dates` = length(unique(date)))
+mission_summary <- full_join(mission_date_summary, mission_class_summary)
+gt(mission_summary) %>%
+  cols_align(., 'center', columns = 2:ncol(mission_summary)) %>% 
+  tab_footnote('Table 1. Summary of eePlumB classes per mission after validity check (version 2024-04-25).')
+```
 
 ## Model development
 
 We used the built-in gradient tree boost ("GTB") ee.Classifier() method within
 Google Earth Engine to create classification models from the crowd-sourced label
-data. Label data were randomly split into training (70%) and test (30%) data
-sets, with no special handling procedures for classes or satellite missions.
-Data were examined to assure that all classes and missions were present in both
-the training and testing data sets.
+data. Image-dates for each mission were split randomly 70%/30% training and
+testing, except Landsat 9 data which required manual selection of the test set
+such that all classes were present in both the training and testing data sets
+due to the limited number of dates available for the Landsat 9 mission. We did
+not tune the hyper parameters for the GTB model, electing to use default
+settings and 10 trees (a conservative number of trees). Since the GTB classifier
+does not require validation data to build a model, we did not attempt to tune
+hyper parameters, nor did we have sufficient data for a train-val-test split
+that it was acceptable to use only a train-test split. After a model was
+trained, it was applied to the image stack.
 
 GTB models for each mission were trained independently on the rescaled band data
-from red, green, blue, near infrared, and both shortwave infrared bands for
-Landsat missions to classify 5 categories: cloud, open water, light near shore
-sediment, dark near shore sediment, and offshore sediment. For Sentinel-2, the
-bands used to develop the classifier were red, green, blue, red edge 1-3, near
-infrared, and both short-wave infrared bands. We did not tune the
-hyperparameters for the GTB model, as performance was already acceptable for
-discerning open water from sediment plume using 10 trees.
+(0-1 values) from all available surface reflectance bands to classify the 5
+categories: cloud, open water, light near shore sediment, dark near shore
+sediment, and offshore sediment. In addition to the 5-category classification,
+we trained a 3-class model. Preliminary data analysis revealed that there were
+classes in the 5-class group that were not statistically different from one
+another on an individual band basis (see the rendered .html 02-06 in the
+modeling subdirectory of the repository). While it was likely that multiple band
+interactions could have rendered these non-differences obsolete, we wanted to
+test the performance if we only classified open water, cloud, and sediment
+(reclassified from all three sediment classes).
 
 ## Image classification
 
 ### Image Pre-processing
 
 Mosaic-ed images were made for each mission-date as mean band values where any
-two path row or tiles overlapped. All Landsat mission-date images were
-pre-processed to remove saturated pixels, and only images with an image quality
-greater than or equal to 7 were included. Sentinel-2 bands that had a pixel
-resoluiton greater than 10m x 10m were reprojected (downsampled) to 10m x 10m
-pixel sizes so that the GTB model could be applied to the composite images more
-efficiently. No further pre-processing was completed on the Sentinel-2 data.
+two path row or tiles overlapped. Sentinel-2 bands that had a pixel resolution
+greater than 10m x 10m were resampled (downsampled) to 10m x 10m pixel sizes so
+that the GTB model could be applied to the composite images more efficiently.
+
+Pixel masking was slightly different for each mission. The following metadata
+and pixel masks were applied to the stack to create the most conservative raster
+output. All stacks were limited to the months of April-November to align with
+the label data.
+
+-   Landsat 5 and 7
+
+    -   Scene-level filters: CLOUD_COVER \< 80, IMAGE_QUALITY \>= 7
+
+    -   Pixel-level filters: SR_ATMOS_OPACITY \< 0.3 (only low opacity),
+        QA_PIXEL bits 8-9 \< 3, 10-11\< 3, 12-13 \< 3, 14-15 \< 3 (masking
+        high-confidence cirrus clouds, snow/ice, cloud shadows, and clouds),
+        QA_RADSAT = 0 (all bands must be unsaturated)
+
+-   Landsat 8 and 9
+
+    -   Scene-level filters: CLOUD_COVER \< 80, IMAGE_QUALITY \>= 7
+
+    -   Pixel-level filters: SR_QA_AEROSOL bits 6-8 \< 3 (masking
+        high-confidence aerosol), QA_PIXEL bits 8-9 \< 3, 10-11\< 3, 12-13 \< 3,
+        14-15 \< 3 (masking high-confidence cirrus clouds, snow/ice, cloud
+        shadows, and clouds), QA_RADSAT = 0 (all bands must be unsaturated)
+
+-   Sentinel 2A/2B
+
+    -   Scene-level filters: CLOUDY_PIXEL_PERCENTAGE \< 80, GENERAL_QUALITY =
+        'PASSED', GEOMETRIC_QUALITY = PASSED, SENSOR_QUALITY = 'PASSED',
+        DEGRADED_MSI_DATA_PERCENTAGE = 0, SNOW_ICE_PERCENTAGE = 0
+
+    -   Pixel-level filters: SCL != c(1, 2, 3, 9, 9, 10, 11), QA60 bit 10 = 0
+        (masking opaque clouds), bit 11 = 0 (masking cirrus clouds)
+
+        ![](images/SCL_classes.png)
 
 Three areas of interest (AOIs) were used in this analysis: the complete AOI, the
 AOI without shoreline contamination, and the AOI with shoreline contamination.
 The area of shoreline contamination was defined as any area within 60 meters of
 a volunteer-identified pixel with shoreline contamination. We assumed that
 shoreline contamination was consistent throughout the analysis and was not
-specific to any particular satellite or time period.
+specific to any particular satellite or time period (see
+`modeling/07_Shoreline_Contamination.html`).
 
 ### Model application and summaries
 
@@ -165,7 +270,7 @@ sediment categories were compiled into a single class.
 
 ## Label dataset
 
-```{r, include = F, echo = F}
+```{r, include = F, echo = F, eval=F}
 ml_labels = c('cloud', 'openWater', 'darkNearShoreSediment', 'lightNearShoreSediment', 'offShoreSediment')
 # load labels
 labels <- read_csv('data/labels/collated_label_data_v2023-07-20.csv')
@@ -214,7 +319,7 @@ gt(label_table_join) %>%
   tab_footnote('Table 2. Summary of eePlumB classes per mission (version 2023-07-20). All labels (left group) are the raw number of collated labels, the right group are labels that have been filtered as described.')
 ```
 
-```{r, include = F, echo = F}
+```{r, include = F, echo = F, eval=F}
 mission_date_summary <- labels %>%
   group_by(mission, date) %>%
   tally()
@@ -241,7 +346,7 @@ the dates `r min(mission_date_summary_filtered$date)` to
 `r max(mission_date_summary_filtered$date)`. See Table 2 for a complete
 breakdown of labels by mission-date combination.
 
-```{r, echo = F}
+```{r, echo = F, eval=FALSE}
 gt(summary_table_join) %>%
   cols_align(., 'center', columns = c('unique mission-dates (all)', 'unique mission-dates (filtered)')) %>%
   tab_style(cell_text(size = 'small'), cells_body()) %>%
@@ -260,7 +365,7 @@ recall, was reasonable across all categories and missions with the minimum F1
 score being 0.62 for "dark near-shore sediment" for Landsat 7 (Table 4). Cloud
 and open water classification F1 scores were always greater than 0.86 (Table 4).
 
-```{r, echo = F}
+```{r, echo = F, eval=F}
 # get a list of the performance metrics list
 perf_metrics_list <- list.files("data/output/",
                                 pattern = "_performance_stats.csv",
@@ -291,7 +396,7 @@ gt(perf_metrics) %>%
 When the sediment classes were aggregated to a single sediment class, F1 scores
 and the kappa statistic increased dramatically (Table 5).
 
-```{r echo = F}
+```{r echo = F, eval=F}
 # load confusion files
 confusion_files <- list.files("data/output",
                               pattern = c(model_version),
@@ -398,7 +503,7 @@ summary_simple <- summary_simple %>%
          "open water" = "openWater")
 ```
 
-```{r echo = F}
+```{r echo = F, eval = F}
 gt(summary_simple) %>%
   cols_align(., 'center', columns = c("cloud":"model kappa statistic")) %>%
   tab_spanner("classification F1 score",
@@ -452,7 +557,3 @@ clouds. More investigation is needed to determine cirrus cloud contamination in
 those instances.
 
 # References
-
-```{r, echo = F}
-knitr::wrap_rmd('Methods_Results_Summary.Rmd', width = 80, backup = NULL)
-```

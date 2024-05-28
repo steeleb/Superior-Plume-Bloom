@@ -475,8 +475,8 @@ def mask_cirrus_opaque(image):
   # where cirrus confidence is high
   cirrus = extract_qa_bits(qa, 11, 12, 'cirrus')
   opaque = extract_qa_bits(qa, 10, 11, 'opaque')
-  mask = (cirrus.lt(2)
-    .And(opaque.lt(2)))
+  mask = (cirrus.eq(0)
+    .And(opaque.eq(0)))
   return image.updateMask(mask)
 
 
