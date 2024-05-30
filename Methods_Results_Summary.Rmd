@@ -227,6 +227,7 @@ the label data.
 
         ![](images/SCL_classes.png)
 
+
 Three areas of interest (AOIs) were used in this analysis: the complete AOI, the
 AOI without shoreline contamination, and the AOI with shoreline contamination.
 The area of shoreline contamination was defined as any area within 60 meters of
@@ -270,7 +271,7 @@ sediment categories were compiled into a single class.
 
 ## Label dataset
 
-```{r, include = F, echo = F, eval=F}
+```{r, include = F, echo = F, eval=FALSE}
 ml_labels = c('cloud', 'openWater', 'darkNearShoreSediment', 'lightNearShoreSediment', 'offShoreSediment')
 # load labels
 labels <- read_csv('data/labels/collated_label_data_v2023-07-20.csv')
