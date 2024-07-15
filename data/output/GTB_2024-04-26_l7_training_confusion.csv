@@ -1,4 +1,6 @@
-index,class,cloud,openWater,sediment,mission
-0,cloud,285,0,3,Landsat 7
-1,openWater,0,172,3,Landsat 7
-2,sediment,2,3,477,Landsat 7
+class,cloud,openWater,lightNearShoreSediment,offShoreSediment,darkNearShoreSediment,mission
+cloud,287,0,0,0,1,Landsat 7
+openWater,0,172,0,0,3,Landsat 7
+lightNearShoreSediment,2,0,179,2,2,Landsat 7
+offShoreSediment,0,1,8,35,1,Landsat 7
+darkNearShoreSediment,1,1,0,0,250,Landsat 7
